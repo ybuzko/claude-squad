@@ -5,6 +5,7 @@ import (
 	"claude-squad/session"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -14,9 +15,26 @@ import (
 
 const readyIcon = "● "
 const pausedIcon = "⏸ "
+const blockedIcon = "! "
+const doneIcon = "✓ "
 
 var readyStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.AdaptiveColor{Light: "#51bd73", Dark: "#51bd73"})
+
+var blockedStyle = lipgloss.NewStyle().
+	Bold(true).
+	Foreground(lipgloss.AdaptiveColor{Light: "#d9534f", Dark: "#ff6b6b"})
+
+var doneStyle = lipgloss.NewStyle().
+	Foreground(lipgloss.AdaptiveColor{Light: "#888888", Dark: "#888888"})
+
+var blockedBadgeStyle = lipgloss.NewStyle().
+	Background(lipgloss.Color("#ff6b6b")).
+	Foreground(lipgloss.Color("#1a1a1a"))
+
+var idleBadgeStyle = lipgloss.NewStyle().
+	Background(lipgloss.Color("#51bd73")).
+	Foreground(lipgloss.Color("#1a1a1a"))
 
 var addedLinesStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.AdaptiveColor{Light: "#51bd73", Dark: "#51bd73"})
@@ -59,10 +77,83 @@ type List struct {
 	height, width int
 	renderer      *InstanceRenderer
 	autoyes       bool
+	// linearMode enables the blocked/idle header counts and the urgency sort.
+	linearMode bool
 
 	// map of repo name to number of instances using it. Used to display the repo name only if there are
 	// multiple repos in play.
 	repos map[string]int
+}
+
+// SetLinearMode toggles the ticket-dispatcher presentation (header counts, urgency sort).
+func (l *List) SetLinearMode(enabled bool) {
+	l.linearMode = enabled
+}
+
+// statusRank orders instances by how urgently they need a human: blocked first, then
+// idle (waiting for a prompt), then working, then paused, then done.
+func statusRank(s session.Status) int {
+	switch s {
+	case session.Blocked:
+		return 0
+	case session.Ready:
+		return 1
+	case session.Running, session.Loading:
+		return 2
+	case session.Paused:
+		return 3
+	case session.Done:
+		return 4
+	}
+	return 5
+}
+
+// SortByUrgency stably reorders the list by statusRank, keeping the current selection
+// on the same instance. Returns true if the order changed.
+func (l *List) SortByUrgency() bool {
+	if len(l.items) < 2 {
+		return false
+	}
+	selected := l.GetSelectedInstance()
+	before := make([]*session.Instance, len(l.items))
+	copy(before, l.items)
+	sort.SliceStable(l.items, func(a, b int) bool {
+		return statusRank(l.items[a].Status) < statusRank(l.items[b].Status)
+	})
+	changed := false
+	for i := range before {
+		if before[i] != l.items[i] {
+			changed = true
+			break
+		}
+	}
+	if changed && selected != nil {
+		l.SelectInstance(selected)
+	}
+	return changed
+}
+
+// CountByStatus returns how many instances are blocked and how many are idle (ready).
+func (l *List) CountByStatus() (blocked, idle int) {
+	for _, item := range l.items {
+		switch item.Status {
+		case session.Blocked:
+			blocked++
+		case session.Ready:
+			idle++
+		}
+	}
+	return blocked, idle
+}
+
+// FindByTitle returns the instance with the given title, or nil.
+func (l *List) FindByTitle(title string) *session.Instance {
+	for _, item := range l.items {
+		if item.Title == title {
+			return item
+		}
+	}
+	return nil
 }
 
 func NewList(spinner *spinner.Model, autoYes bool) *List {
@@ -135,6 +226,10 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 		join = readyStyle.Render(readyIcon)
 	case session.Paused:
 		join = pausedStyle.Render(pausedIcon)
+	case session.Blocked:
+		join = blockedStyle.Render(blockedIcon)
+	case session.Done:
+		join = doneStyle.Render(doneIcon)
 	default:
 	}
 
@@ -237,16 +332,31 @@ func (l *List) String() string {
 	// Write title line
 	// add padding of 2 because the border on list items adds some extra characters
 	titleWidth := AdjustPreviewWidth(l.width) + 2
-	if !l.autoyes {
+	var badge string
+	switch {
+	case l.linearMode:
+		blocked, idle := l.CountByStatus()
+		parts := []string{}
+		if blocked > 0 {
+			parts = append(parts, blockedBadgeStyle.Render(fmt.Sprintf(" %d blocked ", blocked)))
+		}
+		if idle > 0 {
+			parts = append(parts, idleBadgeStyle.Render(fmt.Sprintf(" %d idle ", idle)))
+		}
+		badge = lipgloss.JoinHorizontal(lipgloss.Top, parts...)
+	case l.autoyes:
+		badge = autoYesStyle.Render(autoYesText)
+	}
+	if badge == "" {
 		b.WriteString(lipgloss.Place(
 			titleWidth, 1, lipgloss.Left, lipgloss.Bottom, mainTitle.Render(titleText)))
 	} else {
 		title := lipgloss.Place(
 			titleWidth/2, 1, lipgloss.Left, lipgloss.Bottom, mainTitle.Render(titleText))
-		autoYes := lipgloss.Place(
-			titleWidth-(titleWidth/2), 1, lipgloss.Right, lipgloss.Bottom, autoYesStyle.Render(autoYesText))
+		right := lipgloss.Place(
+			titleWidth-(titleWidth/2), 1, lipgloss.Right, lipgloss.Bottom, badge)
 		b.WriteString(lipgloss.JoinHorizontal(
-			lipgloss.Top, title, autoYes))
+			lipgloss.Top, title, right))
 	}
 
 	b.WriteString("\n")

@@ -1,0 +1,41 @@
+{
+  "_comment": "Merge the `hooks` object into ~/.claude/settings.json. `cs hook` is a no-op unless CS_ISSUE_ID is set, which only the Claude Squad spawner does, so ordinary Claude Code sessions are unaffected. `cs` must be on PATH (or use an absolute path).",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "cs hook", "timeout": 5 }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "cs hook", "timeout": 5 }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          { "type": "command", "command": "cs hook", "timeout": 5 }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "cs hook", "timeout": 5 }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt|elicitation_dialog|elicitation_url_dialog|agent_needs_input",
+        "hooks": [
+          { "type": "command", "command": "cs hook", "timeout": 5 }
+        ]
+      }
+    ]
+  }
+}

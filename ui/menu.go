@@ -51,6 +51,14 @@ type Menu struct {
 
 	// keyDown is the key which is pressed. The default is -1.
 	keyDown keys.KeyName
+	// linearMode adds the ticket keybinding to the menu.
+	linearMode bool
+}
+
+// SetLinearMode toggles the Linear-specific menu entries.
+func (m *Menu) SetLinearMode(enabled bool) {
+	m.linearMode = enabled
+	m.updateOptions()
 }
 
 var defaultMenuOptions = []keys.KeyName{keys.KeyNew, keys.KeyPrompt, keys.KeyHelp, keys.KeyQuit}
@@ -129,6 +137,9 @@ func (m *Menu) addInstanceOptions() {
 
 	// Instance management group
 	options := []keys.KeyName{keys.KeyNew, keys.KeyKill}
+	if m.linearMode {
+		options = []keys.KeyName{keys.KeyNew, keys.KeyTicket, keys.KeyKill}
+	}
 
 	// Action group
 	actionGroup := []keys.KeyName{keys.KeyEnter, keys.KeySubmit}
@@ -162,14 +173,18 @@ func (m *Menu) SetSize(width, height int) {
 func (m *Menu) String() string {
 	var s strings.Builder
 
-	// Define group boundaries
+	// Define group boundaries. Linear mode adds `t` to the management group.
+	mgmt := 2
+	if m.linearMode {
+		mgmt = 3
+	}
 	groups := []struct {
 		start int
 		end   int
 	}{
-		{0, 2}, // Instance management group (n, d)
-		{2, 5}, // Action group (enter, submit, pause/resume)
-		{6, 8}, // System group (tab, help, q)
+		{0, mgmt},            // Instance management group (n, [t], d)
+		{mgmt, mgmt + 3},     // Action group (enter, submit, pause/resume)
+		{mgmt + 4, mgmt + 6}, // System group (tab, help, q)
 	}
 
 	for i, k := range m.options {

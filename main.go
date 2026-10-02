@@ -9,11 +9,13 @@ import (
 	"claude-squad/session"
 	"claude-squad/session/git"
 	"claude-squad/session/tmux"
+	"claude-squad/status"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -23,6 +25,7 @@ var (
 	programFlag string
 	autoYesFlag bool
 	daemonFlag  bool
+	linearFlag  bool
 	binName     string
 	rootCmd     = &cobra.Command{
 		Use:   "claude-squad",
@@ -39,17 +42,26 @@ var (
 				return err
 			}
 
-			// Check if we're in a git repository
-			currentDir, err := filepath.Abs(".")
-			if err != nil {
-				return fmt.Errorf("failed to get current directory: %w", err)
-			}
-
-			if !git.IsGitRepo(currentDir) {
-				return fmt.Errorf("error: %s must be run from within a git repository", binName)
-			}
-
 			cfg := config.LoadConfig()
+			linearEnabled := cfg.Linear.Enabled || linearFlag
+
+			if linearEnabled && cfg.Spawn.RepoPath != "" {
+				// Linear mode creates every worktree from spawn.repo_path, so the current
+				// directory does not matter.
+				if !git.IsGitRepo(cfg.Spawn.RepoPath) {
+					return fmt.Errorf("error: spawn.repo_path %q is not a git repository", cfg.Spawn.RepoPath)
+				}
+			} else {
+				// Check if we're in a git repository
+				currentDir, err := filepath.Abs(".")
+				if err != nil {
+					return fmt.Errorf("failed to get current directory: %w", err)
+				}
+
+				if !git.IsGitRepo(currentDir) {
+					return fmt.Errorf("error: %s must be run from within a git repository", binName)
+				}
+			}
 
 			// Program flag overrides config
 			program := cfg.GetProgram()
@@ -73,7 +85,15 @@ var (
 				log.ErrorLog.Printf("failed to stop daemon: %v", err)
 			}
 
-			return app.Run(ctx, program, autoYes)
+			return app.Run(ctx, program, autoYes, linearFlag)
+		},
+	}
+
+	hookCmd = &cobra.Command{
+		Use:   "hook",
+		Short: "Claude Code hook: record session status for the ticket in $CS_ISSUE_ID (reads the hook payload from stdin)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return status.HandleHook(os.Stdin, os.Getenv(status.IssueIDEnv), time.Now())
 		},
 	}
 
@@ -152,6 +172,8 @@ func init() {
 		"[experimental] If enabled, all instances will automatically accept prompts")
 	rootCmd.Flags().BoolVar(&daemonFlag, "daemon", false, "Run a program that loads all sessions"+
 		" and runs autoyes mode on them.")
+	rootCmd.Flags().BoolVar(&linearFlag, "linear", false,
+		"Enable the Linear dispatcher (same as linear.enabled=true in the config)")
 
 	// Hide the daemonFlag as it's only for internal use
 	err := rootCmd.Flags().MarkHidden("daemon")
@@ -162,6 +184,7 @@ func init() {
 	rootCmd.AddCommand(debugCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(resetCmd)
+	rootCmd.AddCommand(hookCmd)
 }
 
 func main() {

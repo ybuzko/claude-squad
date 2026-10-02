@@ -32,6 +32,9 @@ const (
 	// Reorder keybindings
 	KeyMoveUp
 	KeyMoveDown
+
+	// KeyTicket starts a session for a Linear ticket by id (Linear mode only).
+	KeyTicket
 )
 
 // GlobalKeyStringsMap is a global, immutable map string to keybinding.
@@ -55,6 +58,7 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"r":          KeyResume,
 	"p":          KeySubmit,
 	"?":          KeyHelp,
+	"t":          KeyTicket,
 }
 
 // GlobalkeyBindings is a global, immutable map of KeyName tot keybinding.
@@ -123,6 +127,10 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeyMoveDown: key.NewBinding(
 		key.WithKeys("J"),
 		key.WithHelp("J", "move down"),
+	),
+	KeyTicket: key.NewBinding(
+		key.WithKeys("t"),
+		key.WithHelp("t", "new ticket"),
 	),
 
 	// -- Special keybindings --

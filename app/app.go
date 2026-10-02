@@ -6,6 +6,7 @@ import (
 	"claude-squad/log"
 	"claude-squad/session"
 	"claude-squad/session/git"
+	"claude-squad/status"
 	"claude-squad/ui"
 	"claude-squad/ui/overlay"
 	"context"
@@ -21,16 +22,19 @@ import (
 	"github.com/mattn/go-runewidth"
 )
 
-const GlobalInstanceLimit = 10
-
-// Run is the main entrypoint into the application.
-func Run(ctx context.Context, program string, autoYes bool) error {
+// Run is the main entrypoint into the application. forceLinear enables the Linear
+// dispatcher regardless of the config file (the --linear flag).
+func Run(ctx context.Context, program string, autoYes bool, forceLinear bool) error {
+	h, err := newHome(ctx, program, autoYes, forceLinear)
+	if err != nil {
+		return err
+	}
 	p := tea.NewProgram(
-		newHome(ctx, program, autoYes),
+		h,
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(), // Mouse scroll
 	)
-	_, err := p.Run()
+	_, err = p.Run()
 	return err
 }
 
@@ -46,6 +50,8 @@ const (
 	stateHelp
 	// stateConfirm is the state when a confirmation modal is displayed.
 	stateConfirm
+	// stateTicket is the state when the user is entering a Linear issue id.
+	stateTicket
 )
 
 type home struct {
@@ -62,6 +68,8 @@ type home struct {
 	appConfig *config.Config
 	// appState stores persistent application state like seen help screens
 	appState config.AppState
+	// dispatcher polls Linear and spawns ticket sessions. nil when Linear is disabled.
+	dispatcher *dispatcher
 
 	// -- State --
 
@@ -103,9 +111,17 @@ type home struct {
 	confirmationOverlay *overlay.ConfirmationOverlay
 }
 
-func newHome(ctx context.Context, program string, autoYes bool) *home {
+func newHome(ctx context.Context, program string, autoYes bool, forceLinear bool) (*home, error) {
 	// Load application config
 	appConfig := config.LoadConfig()
+	if forceLinear {
+		appConfig.Linear.Enabled = true
+	}
+
+	dispatcher, err := newDispatcher(appConfig)
+	if err != nil {
+		return nil, err
+	}
 
 	// Load application state
 	appState := config.LoadState()
@@ -129,8 +145,11 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 		autoYes:      autoYes,
 		state:        stateDefault,
 		appState:     appState,
+		dispatcher:   dispatcher,
 	}
 	h.list = ui.NewList(&h.spinner, autoYes)
+	h.list.SetLinearMode(dispatcher != nil)
+	h.menu.SetLinearMode(dispatcher != nil)
 
 	// Load saved instances
 	instances, err := storage.LoadInstances()
@@ -148,7 +167,7 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 		}
 	}
 
-	return h
+	return h, nil
 }
 
 // updateHandleWindowSizeEvent sets the sizes of the components.
@@ -190,6 +209,8 @@ func (m *home) Init() tea.Cmd {
 			return previewTickMsg{}
 		},
 		tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance()),
+		// First Linear poll runs immediately; subsequent ones follow the configured interval.
+		m.runPollCmd(),
 	)
 }
 
@@ -236,16 +257,25 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
 	case metadataUpdateDoneMsg:
+		persist := false
 		for _, r := range msg.results {
 			// Skip instances that were paused while metadata was being computed
 			if r.instance.Status == session.Paused {
 				continue
 			}
-			if r.updated {
+			switch {
+			case r.instance.Status == session.Done:
+				// Done comes from Linear and outlives whatever the session is doing.
+			case r.hook != nil:
+				// An explicit hook signal beats the pane-diff heuristic.
+				if applyHookStatus(r.instance, r.hook) {
+					persist = true
+				}
+			case r.updated:
 				r.instance.SetStatus(session.Running)
-			} else if r.hasPrompt {
+			case r.hasPrompt:
 				r.instance.TapEnter()
-			} else {
+			default:
 				r.instance.SetStatus(session.Ready)
 			}
 			if r.diffStats != nil && r.diffStats.Error != nil {
@@ -257,7 +287,35 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				r.instance.SetDiffStats(r.diffStats)
 			}
 		}
-		return m, tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance())
+		cmds := []tea.Cmd{}
+		if m.dispatcher != nil {
+			if m.list.SortByUrgency() {
+				cmds = append(cmds, m.instanceChanged())
+			}
+			cmds = append(cmds, m.drainPending()...)
+		}
+		if persist {
+			if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+				cmds = append(cmds, m.handleError(err))
+			}
+		}
+		cmds = append(cmds, tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance()))
+		return m, tea.Batch(cmds...)
+	case linearPollTickMsg:
+		return m, m.runPollCmd()
+	case linearPollDoneMsg:
+		return m, m.handlePollDone(msg)
+	case trustPromptCheckMsg:
+		return m, m.handleTrustPromptCheck(msg)
+	case ticketLookupDoneMsg:
+		if msg.err != nil {
+			return m, m.handleError(msg.err)
+		}
+		cmd, err := m.spawnTicket(msg.issue)
+		if err != nil {
+			return m, m.handleError(err)
+		}
+		return m, tea.Batch(cmd, m.instanceChanged())
 	case tea.MouseMsg:
 		// Handle mouse wheel events for scrolling the diff/preview pane
 		if msg.Action == tea.MouseActionPress {
@@ -302,6 +360,25 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Handle instance changed after confirmation action
 		return m, m.instanceChanged()
 	case instanceStartedMsg:
+		if msg.autoSpawned {
+			// Ticket sessions must not hijack what the user is looking at: keep the
+			// current selection, skip the help overlay, and just dismiss Claude's trust
+			// prompt so the triage command gets through.
+			if msg.err != nil {
+				previous := m.list.GetSelectedInstance()
+				m.list.SelectInstance(msg.instance)
+				m.list.Kill()
+				if previous != nil && previous != msg.instance {
+					m.list.SelectInstance(previous)
+				}
+				return m, tea.Batch(m.handleError(msg.err), m.instanceChanged())
+			}
+			if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+				return m, m.handleError(err)
+			}
+			return m, tea.Batch(tea.WindowSize(), m.instanceChanged(), m.trustPromptCheckCmd(msg.instance, 0))
+		}
+
 		// Select the instance that just started (or failed)
 		m.list.SelectInstance(msg.instance)
 
@@ -357,7 +434,7 @@ func (m *home) handleMenuHighlighting(msg tea.KeyMsg) (cmd tea.Cmd, returnEarly 
 		m.keySent = false
 		return nil, false
 	}
-	if m.state == statePrompt || m.state == stateHelp || m.state == stateConfirm {
+	if m.state == statePrompt || m.state == stateHelp || m.state == stateConfirm || m.state == stateTicket {
 		return nil, false
 	}
 	// If it's in the global keymap, we should try to highlight it.
@@ -392,6 +469,28 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 
 	if m.state == stateHelp {
 		return m.handleHelpState(msg)
+	}
+
+	if m.state == stateTicket {
+		if msg.String() == "ctrl+c" {
+			return m, m.closeTicketOverlay()
+		}
+		shouldClose, _ := m.textInputOverlay.HandleKeyPress(msg)
+		if !shouldClose {
+			return m, nil
+		}
+		if m.textInputOverlay.IsCanceled() {
+			return m, m.closeTicketOverlay()
+		}
+		identifier := strings.ToUpper(strings.TrimSpace(m.textInputOverlay.GetValue()))
+		closeCmd := m.closeTicketOverlay()
+		if identifier == "" {
+			return m, closeCmd
+		}
+		if m.list.FindByTitle(identifier) != nil {
+			return m, tea.Batch(closeCmd, m.handleError(fmt.Errorf("an instance for %s already exists", identifier)))
+		}
+		return m, tea.Batch(closeCmd, m.lookupTicketCmd(identifier))
 	}
 
 	if m.state == stateNew {
@@ -609,10 +708,22 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	switch name {
 	case keys.KeyHelp:
 		return m.showHelpScreen(helpTypeGeneral{}, nil)
-	case keys.KeyPrompt:
-		if m.list.NumInstances() >= GlobalInstanceLimit {
+	case keys.KeyTicket:
+		if m.dispatcher == nil {
+			return m, nil
+		}
+		if m.list.NumInstances() >= m.instanceLimit() {
 			return m, m.handleError(
-				fmt.Errorf("you can't create more than %d instances", GlobalInstanceLimit))
+				fmt.Errorf("you can't create more than %d instances", m.instanceLimit()))
+		}
+		m.state = stateTicket
+		m.menu.SetState(ui.StatePrompt)
+		m.textInputOverlay = overlay.NewTextInputOverlay("Linear issue id (e.g. TSA-123)", "")
+		return m, tea.WindowSize()
+	case keys.KeyPrompt:
+		if m.list.NumInstances() >= m.instanceLimit() {
+			return m, m.handleError(
+				fmt.Errorf("you can't create more than %d instances", m.instanceLimit()))
 		}
 
 		// Start a background fetch so branches are up to date by the time the picker opens
@@ -624,7 +735,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 
 		instance, err := session.NewInstance(session.InstanceOptions{
 			Title:   "",
-			Path:    ".",
+			Path:    m.workPath(),
 			Program: m.program,
 		})
 		if err != nil {
@@ -639,13 +750,13 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 
 		return m, fetchCmd
 	case keys.KeyNew:
-		if m.list.NumInstances() >= GlobalInstanceLimit {
+		if m.list.NumInstances() >= m.instanceLimit() {
 			return m, m.handleError(
-				fmt.Errorf("you can't create more than %d instances", GlobalInstanceLimit))
+				fmt.Errorf("you can't create more than %d instances", m.instanceLimit()))
 		}
 		instance, err := session.NewInstance(session.InstanceOptions{
 			Title:   "",
-			Path:    ".",
+			Path:    m.workPath(),
 			Program: m.program,
 		})
 		if err != nil {
@@ -678,6 +789,23 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		selected := m.list.GetSelectedInstance()
 		if selected == nil || selected.Status == session.Loading {
 			return m, nil
+		}
+
+		// A live ticket session is paused rather than killed so its branch and Claude
+		// conversation survive; a second D on the paused (or done) instance deletes it.
+		if selected.IsTicket() && !selected.Paused() && selected.Status != session.Done {
+			pauseAction := func() tea.Msg {
+				if err := selected.Pause(); err != nil {
+					return err
+				}
+				m.tabbedWindow.CleanupTerminalForInstance(selected.Title)
+				if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+					return err
+				}
+				return instanceChangedMsg{}
+			}
+			message := fmt.Sprintf("[!] Pause ticket session '%s'? (branch kept; press D again to delete)", selected.Title)
+			return m, m.confirmAction(message, pauseAction)
 		}
 
 		// Create the kill action as a tea.Cmd
@@ -863,6 +991,9 @@ type instanceStartedMsg struct {
 	err             error
 	promptAfterName bool
 	selectedBranch  string
+	// autoSpawned is true for instances created by the Linear dispatcher (or `t`), which
+	// must not steal focus or show the first-start help overlay.
+	autoSpawned bool
 }
 
 // branchSearchDebounceMsg fires after the debounce interval to trigger a search.
@@ -907,6 +1038,8 @@ type instanceMetaResult struct {
 	updated   bool
 	hasPrompt bool
 	diffStats *git.DiffStats
+	// hook is the Claude Code hook status for ticket instances; nil when none exists.
+	hook *status.Status
 }
 
 // metadataUpdateDoneMsg is sent when the background metadata update completes.
@@ -968,6 +1101,13 @@ func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instanc
 				r := &results[i]
 				r.instance = instance
 				r.updated, r.hasPrompt = instance.HasUpdated()
+				if instance.IsTicket() {
+					hs, err := status.Read(instance.IssueID)
+					if err != nil {
+						log.WarningLog.Printf("could not read hook status for %s: %v", instance.IssueID, err)
+					}
+					r.hook = hs
+				}
 				if instance == selected {
 					r.diffStats = instance.ComputeDiff()
 				} else {
@@ -998,6 +1138,19 @@ func (m *home) handleError(err error) tea.Cmd {
 
 func (m *home) newPromptOverlay() *overlay.TextInputOverlay {
 	return overlay.NewTextInputOverlayWithBranchPicker("Enter prompt", "", m.appConfig.GetProfiles())
+}
+
+// closeTicketOverlay dismisses the Linear issue id prompt.
+func (m *home) closeTicketOverlay() tea.Cmd {
+	m.textInputOverlay = nil
+	m.state = stateDefault
+	return tea.Sequence(
+		tea.WindowSize(),
+		func() tea.Msg {
+			m.menu.SetState(ui.StateDefault)
+			return nil
+		},
+	)
 }
 
 // cancelPromptOverlay cancels the prompt overlay, cleaning up unstarted instances.
@@ -1054,7 +1207,7 @@ func (m *home) View() string {
 		m.errBox.String(),
 	)
 
-	if m.state == statePrompt {
+	if m.state == statePrompt || m.state == stateTicket {
 		if m.textInputOverlay == nil {
 			log.ErrorLog.Printf("text input overlay is nil")
 		}
