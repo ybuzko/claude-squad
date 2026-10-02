@@ -26,6 +26,12 @@ const (
 	Loading
 	// Paused is if the instance is paused (worktree removed but branch preserved).
 	Paused
+	// Blocked is if claude is stuck mid-task on a permission prompt or a question and
+	// cannot proceed until a human acts. Only set from Claude Code hook status files.
+	Blocked
+	// Done is if the instance's Linear ticket reached a done state. The session is
+	// kept until the user cleans it up.
+	Done
 )
 
 // Instance is a running instance of claude code.
@@ -53,11 +59,26 @@ type Instance struct {
 	// Prompt is the initial prompt to pass to the instance on startup
 	Prompt string
 
+	// IssueID is the Linear identifier (e.g. "TSA-123") for ticket instances; empty otherwise.
+	IssueID string
+	// IssueUUID is the Linear issue UUID, used for state lookups.
+	IssueUUID string
+	IssueURL  string
+	// ClaudeSessionID is the Claude Code session id reported by the SessionStart hook,
+	// used to resume the conversation after the tmux session dies.
+	ClaudeSessionID string
+	// HookReason is the human-readable reason from the last hook status (not persisted).
+	HookReason string
+
 	// DiffStats stores the current git diff statistics
 	diffStats *git.DiffStats
 
 	// selectedBranch is the existing branch to start on (empty = new branch from HEAD)
 	selectedBranch string
+	// newBranchName, when set, names the new branch to create instead of deriving one
+	// from the title; baseRef is the ref it is created from (empty = HEAD).
+	newBranchName string
+	baseRef       string
 
 	// The below fields are initialized upon calling Start().
 
@@ -81,6 +102,11 @@ func (i *Instance) ToInstanceData() InstanceData {
 		UpdatedAt: time.Now(),
 		Program:   i.Program,
 		AutoYes:   i.AutoYes,
+
+		IssueID:         i.IssueID,
+		IssueUUID:       i.IssueUUID,
+		IssueURL:        i.IssueURL,
+		ClaudeSessionID: i.ClaudeSessionID,
 	}
 
 	// Only include worktree data if gitWorktree is initialized
@@ -119,6 +145,12 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		CreatedAt: data.CreatedAt,
 		UpdatedAt: data.UpdatedAt,
 		Program:   data.Program,
+
+		IssueID:         data.IssueID,
+		IssueUUID:       data.IssueUUID,
+		IssueURL:        data.IssueURL,
+		ClaudeSessionID: data.ClaudeSessionID,
+
 		gitWorktree: git.NewGitWorktreeFromStorage(
 			data.Worktree.RepoPath,
 			data.Worktree.WorktreePath,
@@ -136,7 +168,7 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 
 	if instance.Paused() {
 		instance.started = true
-		instance.tmuxSession = tmux.NewTmuxSession(instance.Title, instance.Program)
+		instance.tmuxSession = instance.newTmuxSession()
 	} else {
 		if err := instance.Start(false); err != nil {
 			return nil, err
@@ -158,6 +190,15 @@ type InstanceOptions struct {
 	AutoYes bool
 	// Branch is an existing branch name to start the session on (empty = new branch from HEAD)
 	Branch string
+	// NewBranchName, when set, is the exact name of the new branch to create (instead of
+	// deriving one from the title). Mutually exclusive with Branch.
+	NewBranchName string
+	// BaseRef is the ref a new branch is created from (e.g. "origin/main"; empty = HEAD).
+	BaseRef string
+	// Linear ticket metadata; empty for hand-created instances.
+	IssueID   string
+	IssueUUID string
+	IssueURL  string
 }
 
 func NewInstance(opts InstanceOptions) (*Instance, error) {
@@ -179,8 +220,46 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		CreatedAt:      t,
 		UpdatedAt:      t,
 		AutoYes:        false,
+		IssueID:        opts.IssueID,
+		IssueUUID:      opts.IssueUUID,
+		IssueURL:       opts.IssueURL,
 		selectedBranch: opts.Branch,
+		newBranchName:  opts.NewBranchName,
+		baseRef:        opts.BaseRef,
 	}, nil
+}
+
+// IsTicket reports whether the instance was spawned for a Linear ticket.
+func (i *Instance) IsTicket() bool {
+	return i.IssueID != ""
+}
+
+// newTmuxSession builds the tmux session for this instance. Ticket instances export
+// CS_ISSUE_ID so Claude Code hooks can report status for them.
+func (i *Instance) newTmuxSession() *tmux.TmuxSession {
+	s := tmux.NewTmuxSession(i.Title, i.Program)
+	if i.IsTicket() {
+		s.SetEnv(map[string]string{"CS_ISSUE_ID": i.IssueID})
+	}
+	return s
+}
+
+// ResumeProgram is the command used to restart a ticket instance's tmux session so
+// the Claude Code conversation continues instead of re-running the initial prompt.
+// Hand-created instances always get their original program back.
+func (i *Instance) ResumeProgram() string {
+	if !i.IsTicket() {
+		return i.Program
+	}
+	fields := strings.Fields(i.Program)
+	if len(fields) == 0 {
+		return i.Program
+	}
+	binary := fields[0]
+	if i.ClaudeSessionID != "" {
+		return fmt.Sprintf("%s --resume %s", binary, i.ClaudeSessionID)
+	}
+	return binary + " -c"
 }
 
 func (i *Instance) RepoName() (string, error) {
@@ -211,7 +290,7 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 		tmuxSession = i.tmuxSession
 	} else {
 		// Create new tmux session
-		tmuxSession = tmux.NewTmuxSession(i.Title, i.Program)
+		tmuxSession = i.newTmuxSession()
 	}
 	i.tmuxSession = tmuxSession
 
@@ -223,6 +302,13 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 			}
 			i.gitWorktree = gitWorktree
 			i.Branch = i.selectedBranch
+		} else if i.newBranchName != "" {
+			gitWorktree, err := git.NewGitWorktreeForBranch(i.Path, i.Title, i.newBranchName, i.baseRef)
+			if err != nil {
+				return fmt.Errorf("failed to create git worktree for branch: %w", err)
+			}
+			i.gitWorktree = gitWorktree
+			i.Branch = gitWorktree.GetBranchName()
 		} else {
 			gitWorktree, branchName, err := git.NewGitWorktree(i.Path, i.Title)
 			if err != nil {
@@ -346,10 +432,10 @@ func (i *Instance) CheckAndHandleTrustPrompt() bool {
 	if !i.started || i.tmuxSession == nil {
 		return false
 	}
-	program := i.Program
-	if !strings.HasSuffix(program, tmux.ProgramClaude) &&
-		!strings.HasSuffix(program, tmux.ProgramAider) &&
-		!strings.HasSuffix(program, tmux.ProgramGemini) {
+	program := tmux.BaseProgram(i.Program)
+	if program != tmux.ProgramClaude &&
+		program != tmux.ProgramAider &&
+		program != tmux.ProgramGemini {
 		return false
 	}
 	return i.tmuxSession.CheckAndHandleTrustPrompt()
@@ -537,6 +623,10 @@ func (i *Instance) Resume() error {
 			return fmt.Errorf("failed to setup git worktree: %w", err)
 		}
 	}
+
+	// A fresh tmux session for a ticket should continue the Claude Code conversation
+	// rather than re-run the initial triage prompt.
+	i.tmuxSession.SetProgram(i.ResumeProgram())
 
 	// Check if tmux session still exists from pause, otherwise create new one
 	if i.tmuxSession.DoesSessionExist() {

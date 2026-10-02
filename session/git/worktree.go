@@ -32,6 +32,9 @@ type GitWorktree struct {
 	// isExistingBranch is true if the branch existed before the session was created.
 	// When true, the branch will not be deleted on cleanup.
 	isExistingBranch bool
+	// baseRef is the ref a new branch is created from. Empty means HEAD of the repo.
+	// A ref under origin/ is fetched first so the branch starts from the remote's tip.
+	baseRef string
 }
 
 func NewGitWorktreeFromStorage(repoPath string, worktreePath string, sessionName string, branchName string, baseCommitSHA string, isExistingBranch bool) *GitWorktree {
@@ -88,6 +91,28 @@ func NewGitWorktree(repoPath string, sessionName string) (tree *GitWorktree, bra
 		branchName:   branchName,
 		worktreePath: worktreePath,
 	}, branchName, nil
+}
+
+// NewGitWorktreeForBranch creates a GitWorktree for a new branch with an explicit
+// name, created from baseRef (empty = HEAD). The name is sanitized but not prefixed.
+func NewGitWorktreeForBranch(repoPath string, sessionName string, branchName string, baseRef string) (*GitWorktree, error) {
+	branchName = sanitizeBranchName(branchName)
+	if branchName == "" {
+		return nil, fmt.Errorf("branch name is empty after sanitizing")
+	}
+
+	repoPath, worktreePath, err := resolveWorktreePaths(repoPath, branchName)
+	if err != nil {
+		return nil, err
+	}
+
+	return &GitWorktree{
+		repoPath:     repoPath,
+		sessionName:  sessionName,
+		branchName:   branchName,
+		worktreePath: worktreePath,
+		baseRef:      baseRef,
+	}, nil
 }
 
 // NewGitWorktreeFromBranch creates a new GitWorktree that uses an existing branch.

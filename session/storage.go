@@ -22,6 +22,12 @@ type InstanceData struct {
 	Program   string          `json:"program"`
 	Worktree  GitWorktreeData `json:"worktree"`
 	DiffStats DiffStatsData   `json:"diff_stats"`
+
+	// Linear ticket fields; empty for instances created by hand.
+	IssueID         string `json:"issue_id,omitempty"`
+	IssueUUID       string `json:"issue_uuid,omitempty"`
+	IssueURL        string `json:"issue_url,omitempty"`
+	ClaudeSessionID string `json:"claude_session_id,omitempty"`
 }
 
 // GitWorktreeData represents the serializable data of a GitWorktree

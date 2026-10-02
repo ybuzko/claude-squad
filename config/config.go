@@ -32,6 +32,35 @@ type Profile struct {
 	Program string `json:"program"`
 }
 
+// LinearConfig drives the read-only Linear poller that auto-spawns ticket sessions.
+type LinearConfig struct {
+	Enabled bool `json:"enabled"`
+	// APIKey is a Linear personal API key. The LINEAR_API_KEY environment variable
+	// takes precedence when set.
+	APIKey string `json:"api_key,omitempty"`
+	// ViewID is the UUID of the Linear custom view that is the source of tickets.
+	ViewID          string `json:"view_id"`
+	PollIntervalSec int    `json:"poll_interval_sec"`
+	// MaxConcurrent caps instances that are actively working (running or loading).
+	// Blocked, idle, paused and done instances do not count.
+	MaxConcurrent int `json:"max_concurrent"`
+	// DoneStateTypes are Linear workflow state types (completed, canceled, ...) that
+	// mark a ticket's instance as Done.
+	DoneStateTypes []string `json:"done_state_types"`
+	// DoneStateIDs are specific workflow state UUIDs that also count as Done.
+	DoneStateIDs []string `json:"done_state_ids,omitempty"`
+}
+
+// SpawnConfig describes how a ticket session is launched.
+type SpawnConfig struct {
+	// Program is the command run in the tmux session; {ISSUE_ID} is substituted.
+	Program string `json:"program"`
+	// RepoPath is the main checkout that worktrees are created from.
+	RepoPath string `json:"repo_path"`
+	// BranchPrefix is prepended to ticket branch names, e.g. "agent/".
+	BranchPrefix string `json:"branch_prefix"`
+}
+
 // Config represents the application configuration
 type Config struct {
 	// DefaultProgram is the default program to run in new instances
@@ -44,6 +73,49 @@ type Config struct {
 	BranchPrefix string `json:"branch_prefix"`
 	// Profiles is a list of named program profiles.
 	Profiles []Profile `json:"profiles,omitempty"`
+	// InstanceLimit caps the total number of instances.
+	InstanceLimit int          `json:"instance_limit"`
+	Linear        LinearConfig `json:"linear"`
+	Spawn         SpawnConfig  `json:"spawn"`
+}
+
+const (
+	DefaultInstanceLimit         = 10
+	defaultLinearPollIntervalSec = 60
+	defaultLinearMaxConcurrent   = 5
+	defaultSpawnProgram          = `claude "/triage {ISSUE_ID}"`
+	defaultSpawnBranchPrefix     = "agent/"
+)
+
+// applyDefaults fills zero-valued fields so configs written by older versions keep
+// working, and so a hand-edited config only needs the keys the user cares about.
+func (c *Config) applyDefaults() {
+	if c.InstanceLimit <= 0 {
+		c.InstanceLimit = DefaultInstanceLimit
+	}
+	if c.Linear.PollIntervalSec <= 0 {
+		c.Linear.PollIntervalSec = defaultLinearPollIntervalSec
+	}
+	if c.Linear.MaxConcurrent <= 0 {
+		c.Linear.MaxConcurrent = defaultLinearMaxConcurrent
+	}
+	if c.Linear.DoneStateTypes == nil {
+		c.Linear.DoneStateTypes = []string{"completed", "canceled"}
+	}
+	if c.Spawn.Program == "" {
+		c.Spawn.Program = defaultSpawnProgram
+	}
+	if c.Spawn.BranchPrefix == "" {
+		c.Spawn.BranchPrefix = defaultSpawnBranchPrefix
+	}
+}
+
+// LinearAPIKey returns the API key, preferring the LINEAR_API_KEY environment variable.
+func (c *Config) LinearAPIKey() string {
+	if key := os.Getenv("LINEAR_API_KEY"); key != "" {
+		return key
+	}
+	return c.Linear.APIKey
 }
 
 // GetProgram returns the program to run. If Profiles is non-empty and
@@ -89,7 +161,7 @@ func DefaultConfig() *Config {
 		program = defaultProgram
 	}
 
-	return &Config{
+	cfg := &Config{
 		DefaultProgram:     program,
 		AutoYes:            false,
 		DaemonPollInterval: 1000,
@@ -102,6 +174,8 @@ func DefaultConfig() *Config {
 			return fmt.Sprintf("%s/", strings.ToLower(user.Username))
 		}(),
 	}
+	cfg.applyDefaults()
+	return cfg
 }
 
 // GetClaudeCommand attempts to find the "claude" command in the user's shell
@@ -180,6 +254,7 @@ func LoadConfig() *Config {
 		log.ErrorLog.Printf("failed to parse config file: %v", err)
 		return DefaultConfig()
 	}
+	config.applyDefaults()
 
 	return &config
 }

@@ -11,7 +11,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +33,8 @@ type TmuxSession struct {
 	// The name of the tmux session and the sanitized name used for tmux commands.
 	sanitizedName string
 	program       string
+	// env is exported into the tmux session (and so into program) on Start.
+	env map[string]string
 	// ptyFactory is used to create a PTY for the tmux session.
 	ptyFactory PtyFactory
 	// cmdExec is used to execute commands in the tmux session.
@@ -90,6 +94,27 @@ func newTmuxSession(name string, program string, ptyFactory PtyFactory, cmdExec 
 	}
 }
 
+// SetEnv sets environment variables exported into the tmux session on Start.
+func (t *TmuxSession) SetEnv(env map[string]string) {
+	t.env = env
+}
+
+// SetProgram changes the command run by the next Start. It has no effect on a
+// session that is already running.
+func (t *TmuxSession) SetProgram(program string) {
+	t.program = program
+}
+
+// BaseProgram returns the bare executable name of a program string such as
+// "/usr/local/bin/claude \"/triage X\"" → "claude".
+func BaseProgram(program string) string {
+	fields := strings.Fields(program)
+	if len(fields) == 0 {
+		return ""
+	}
+	return filepath.Base(fields[0])
+}
+
 // Start creates and starts a new tmux session, then attaches to it. Program is the command to run in
 // the session (ex. claude). workdir is the git worktree directory.
 func (t *TmuxSession) Start(workDir string) error {
@@ -99,7 +124,17 @@ func (t *TmuxSession) Start(workDir string) error {
 	}
 
 	// Create a new detached tmux session and start claude in it
-	cmd := exec.Command("tmux", "new-session", "-d", "-s", t.sanitizedName, "-c", workDir, t.program)
+	args := []string{"new-session", "-d", "-s", t.sanitizedName, "-c", workDir}
+	envKeys := make([]string, 0, len(t.env))
+	for k := range t.env {
+		envKeys = append(envKeys, k)
+	}
+	sort.Strings(envKeys)
+	for _, k := range envKeys {
+		args = append(args, "-e", fmt.Sprintf("%s=%s", k, t.env[k]))
+	}
+	args = append(args, t.program)
+	cmd := exec.Command("tmux", args...)
 
 	ptmx, err := t.ptyFactory.Start(cmd)
 	if err != nil {
@@ -164,7 +199,7 @@ func (t *TmuxSession) CheckAndHandleTrustPrompt() bool {
 		return false
 	}
 
-	if strings.HasSuffix(t.program, ProgramClaude) {
+	if BaseProgram(t.program) == ProgramClaude {
 		if strings.Contains(content, "Do you trust the files in this folder?") ||
 			strings.Contains(content, "new MCP server") {
 			if err := t.TapEnter(); err != nil {

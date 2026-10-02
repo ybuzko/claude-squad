@@ -89,14 +89,23 @@ func (g *GitWorktree) setupNewWorktree() error {
 	// Clean up any existing branch using git CLI (much faster than go-git PlainOpen)
 	_, _ = g.runGitCommand(g.repoPath, "branch", "-D", g.branchName) // Ignore error if branch doesn't exist
 
-	output, err := g.runGitCommand(g.repoPath, "rev-parse", "HEAD")
+	baseRef := g.baseRef
+	if baseRef == "" {
+		baseRef = "HEAD"
+	} else if remoteBranch, ok := strings.CutPrefix(baseRef, "origin/"); ok {
+		if _, err := g.runGitCommand(g.repoPath, "fetch", "origin", remoteBranch); err != nil {
+			return fmt.Errorf("failed to fetch origin/%s: %w", remoteBranch, err)
+		}
+	}
+
+	output, err := g.runGitCommand(g.repoPath, "rev-parse", baseRef)
 	if err != nil {
 		if strings.Contains(err.Error(), "fatal: ambiguous argument 'HEAD'") ||
 			strings.Contains(err.Error(), "fatal: not a valid object name") ||
 			strings.Contains(err.Error(), "fatal: HEAD: not a valid object name") {
 			return fmt.Errorf("this appears to be a brand new repository: please create an initial commit before creating an instance")
 		}
-		return fmt.Errorf("failed to get HEAD commit hash: %w", err)
+		return fmt.Errorf("failed to resolve %s: %w", baseRef, err)
 	}
 	headCommit := strings.TrimSpace(string(output))
 	g.baseCommitSHA = headCommit
