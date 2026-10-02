@@ -5,6 +5,7 @@ import (
 	cmd2 "claude-squad/cmd"
 	"claude-squad/config"
 	"claude-squad/daemon"
+	"claude-squad/linear"
 	"claude-squad/log"
 	"claude-squad/session"
 	"claude-squad/session/git"
@@ -151,6 +152,32 @@ var (
 
 			fmt.Printf("Config: %s\n%s\n", filepath.Join(configDir, config.ConfigFileName), configJson)
 
+			// With Linear configured, prove the credentials and view id work by
+			// listing what the dispatcher would see. Read-only.
+			if cfg.Linear.Enabled || linearFlag {
+				key := cfg.LinearAPIKey()
+				if key == "" {
+					fmt.Println("\nLinear: enabled, but no API key (set LINEAR_API_KEY)")
+					return nil
+				}
+				client := linear.NewClient(key)
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				issues, err := client.ViewIssues(ctx, cfg.Linear.ViewID)
+				if err != nil {
+					return fmt.Errorf("linear view check failed: %w", err)
+				}
+				rule := linear.DoneRule{StateTypes: cfg.Linear.DoneStateTypes, StateIDs: cfg.Linear.DoneStateIDs}
+				fmt.Printf("\nLinear view %s: %d issues\n", cfg.Linear.ViewID, len(issues))
+				for _, is := range issues {
+					doneMark := ""
+					if rule.IsDone(is) {
+						doneMark = " (done)"
+					}
+					fmt.Printf("  %-10s %-14s %s%s\n", is.Identifier, is.StateName, is.Title, doneMark)
+				}
+			}
+
 			return nil
 		},
 	}
@@ -174,6 +201,8 @@ func init() {
 		" and runs autoyes mode on them.")
 	rootCmd.Flags().BoolVar(&linearFlag, "linear", false,
 		"Enable the Linear dispatcher (same as linear.enabled=true in the config)")
+	debugCmd.Flags().BoolVar(&linearFlag, "linear", false,
+		"Also check the Linear view configured in linear.view_id")
 
 	// Hide the daemonFlag as it's only for internal use
 	err := rootCmd.Flags().MarkHidden("daemon")

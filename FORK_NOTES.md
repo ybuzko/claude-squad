@@ -29,6 +29,31 @@ Where the fork hooks in. Keep this table current when rebasing.
 Dead code upstream worth knowing: `instanceStartDoneMsg` / `runInstanceStartCmd`
 in `app/app.go` are unused; `instanceStartedMsg` is the live path.
 
+## Setup
+
+```bash
+go build -o ~/.local/bin/cs .          # Go 1.25.8; ~/.local/bin must be on PATH
+export LINEAR_API_KEY=lin_api_...      # in your shell profile
+cs debug --linear                      # prints the config and lists the view's issues
+cs                                     # or `cs --linear` to force it on
+```
+
+Merge the `hooks` object from `hooks/claude-settings.snippet.json` into
+`~/.claude/settings.json`. Since `cs hook` exits immediately when `CS_ISSUE_ID` is
+unset, the hooks are inert in every Claude Code session the dispatcher did not start.
+
+## Keys added or changed in Linear mode
+
+| Key | Behaviour |
+|---|---|
+| `t` | Prompt for an issue id (any ticket, in the view or not) and spawn it like the poller would |
+| `D` | On a live ticket session: **pause** (tmux killed, worktree removed, branch and Claude conversation kept). On a paused or done one: delete worktree + branch |
+| `r` | Resume a paused ticket session with `claude --resume <session>` (or `claude -c`), so the conversation continues |
+| `n` / `N` | Unchanged — plain sessions for non-ticket work, created from `spawn.repo_path` |
+
+Deleting a ticket session whose issue is still in the view makes the poller respawn
+it fresh on the next poll; that is the "start over" path.
+
 ## Status contract (Claude Code hooks → TUI)
 
 `cs hook` is installed as a Claude Code hook (see `hooks/claude-settings.snippet.json`).
@@ -77,5 +102,9 @@ File: `~/.claude-squad/status/<ISSUE-ID>.json`
 - `max_concurrent` caps instances that are actually working (`Running`/`Loading`);
   `blocked`, `idle`, `Paused`, `Done` do not count. `instance_limit` caps the total.
 - Done detection: an instance is `Done` when its issue's workflow state has a type in
-  `done_state_types`, or an id in `done_state_ids`.
-- Branch: `agent/<issue-id-lowercase>-<slugified-title>`, from `origin/main`.
+  `done_state_types`, or an id in `done_state_ids`. A reopened ticket flips back.
+- Branch: `agent/<issue-id-lowercase>-<slugified-title>`, from `origin/main`
+  (fetched right before the worktree is created).
+- Worktree path stays upstream's `~/.claude-squad/worktrees/<branch>_<hex>`; the
+  path is recorded on the instance and reused by Pause/Resume, which is what keeps
+  `claude --resume` pointed at the right transcript.
