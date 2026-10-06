@@ -737,9 +737,10 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		}
 
 		instance, err := session.NewInstance(session.InstanceOptions{
-			Title:   "",
-			Path:    m.workPath(),
-			Program: m.program,
+			Title:        "",
+			Path:         m.workPath(),
+			Program:      m.program,
+			SetupCommand: m.setupCommand(),
 		})
 		if err != nil {
 			return m, m.handleError(err)
@@ -758,9 +759,10 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 				fmt.Errorf("you can't create more than %d instances", m.instanceLimit()))
 		}
 		instance, err := session.NewInstance(session.InstanceOptions{
-			Title:   "",
-			Path:    m.workPath(),
-			Program: m.program,
+			Title:        "",
+			Path:         m.workPath(),
+			Program:      m.program,
+			SetupCommand: m.setupCommand(),
 		})
 		if err != nil {
 			return m, m.handleError(err)

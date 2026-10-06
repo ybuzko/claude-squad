@@ -97,7 +97,8 @@ File: `~/.claude-squad/status/<ISSUE-ID>.json`
   "spawn": {
     "program": "claude \"/triage-linear-ticket {ISSUE_ID}\"",
     "repo_path": "/home/yaroslav/agent1/backend",
-    "branch_prefix": "agent/"
+    "branch_prefix": "agent/",
+    "setup_command": "pnpm install --frozen-lockfile"
   },
   "instance_limit": 20
 }
@@ -111,6 +112,12 @@ File: `~/.claude-squad/status/<ISSUE-ID>.json`
   `done_state_types`, or an id in `done_state_ids`. A reopened ticket flips back.
 - Branch: `agent/<issue-id-lowercase>-<slugified-title>`, from `origin/main`
   (fetched right before the worktree is created).
+- `spawn.setup_command` runs with `$SHELL -lc` inside every new worktree (ticket or
+  `n`/`N`) before the program starts, and again when `r` recreates a paused
+  worktree. The instance shows "Setting up workspace…" meanwhile; a non-zero exit
+  fails the start and names the log at `~/.claude-squad/setup-logs/<title>.log`.
+  A worktree has no `node_modules`/`dist`, so without this the agent can read and
+  edit but not run anything.
 - Worktree path stays upstream's `~/.claude-squad/worktrees/<branch>_<hex>`; the
   path is recorded on the instance and reused by Pause/Resume, which is what keeps
   `claude --resume` pointed at the right transcript.

@@ -59,6 +59,10 @@ type SpawnConfig struct {
 	RepoPath string `json:"repo_path"`
 	// BranchPrefix is prepended to ticket branch names, e.g. "agent/".
 	BranchPrefix string `json:"branch_prefix"`
+	// SetupCommand is run by the shell inside every new worktree before the program
+	// starts (and again when a paused session's worktree is recreated), e.g.
+	// "pnpm install --frozen-lockfile". Empty disables it.
+	SetupCommand string `json:"setup_command,omitempty"`
 }
 
 // Config represents the application configuration

@@ -263,6 +263,7 @@ func (m *home) spawnTicket(issue linear.Issue) (tea.Cmd, error) {
 		IssueID:       issue.Identifier,
 		IssueUUID:     issue.ID,
 		IssueURL:      issue.URL,
+		SetupCommand:  m.setupCommand(),
 	})
 	if err != nil {
 		return nil, err
@@ -341,6 +342,15 @@ func (m *home) lookupTicketCmd(identifier string) tea.Cmd {
 
 func (m *home) instanceLimit() int {
 	return m.appConfig.InstanceLimit
+}
+
+// setupCommand is the per-worktree setup step for new instances in Linear mode;
+// empty otherwise, which keeps upstream behaviour for plain sessions.
+func (m *home) setupCommand() string {
+	if m.dispatcher != nil {
+		return m.dispatcher.cfg.Spawn.SetupCommand
+	}
+	return ""
 }
 
 // workPath is the repo new instances are created from: spawn.repo_path in Linear

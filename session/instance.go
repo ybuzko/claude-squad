@@ -1,6 +1,7 @@
 package session
 
 import (
+	"claude-squad/config"
 	"claude-squad/log"
 	"claude-squad/session/git"
 	"claude-squad/session/tmux"
@@ -9,6 +10,7 @@ import (
 
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -69,6 +71,8 @@ type Instance struct {
 	ClaudeSessionID string
 	// HookReason is the human-readable reason from the last hook status (not persisted).
 	HookReason string
+	// SetupCommand runs in the worktree whenever it is (re)created, before the program.
+	SetupCommand string
 
 	// DiffStats stores the current git diff statistics
 	diffStats *git.DiffStats
@@ -107,6 +111,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		IssueUUID:       i.IssueUUID,
 		IssueURL:        i.IssueURL,
 		ClaudeSessionID: i.ClaudeSessionID,
+		SetupCommand:    i.SetupCommand,
 	}
 
 	// Only include worktree data if gitWorktree is initialized
@@ -150,6 +155,7 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		IssueUUID:       data.IssueUUID,
 		IssueURL:        data.IssueURL,
 		ClaudeSessionID: data.ClaudeSessionID,
+		SetupCommand:    data.SetupCommand,
 
 		gitWorktree: git.NewGitWorktreeFromStorage(
 			data.Worktree.RepoPath,
@@ -199,6 +205,8 @@ type InstanceOptions struct {
 	IssueID   string
 	IssueUUID string
 	IssueURL  string
+	// SetupCommand runs in the worktree before the program starts (empty = none).
+	SetupCommand string
 }
 
 func NewInstance(opts InstanceOptions) (*Instance, error) {
@@ -223,6 +231,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		IssueID:        opts.IssueID,
 		IssueUUID:      opts.IssueUUID,
 		IssueURL:       opts.IssueURL,
+		SetupCommand:   opts.SetupCommand,
 		selectedBranch: opts.Branch,
 		newBranchName:  opts.NewBranchName,
 		baseRef:        opts.BaseRef,
@@ -351,6 +360,11 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 		// Setup git worktree first
 		if err := i.gitWorktree.Setup(); err != nil {
 			setupErr = fmt.Errorf("failed to setup git worktree: %w", err)
+			return setupErr
+		}
+
+		if err := i.runSetupCommand(); err != nil {
+			setupErr = err
 			return setupErr
 		}
 
@@ -592,6 +606,58 @@ func (i *Instance) Pause() error {
 	return nil
 }
 
+// runSetupCommand runs the configured setup command inside the worktree. Output goes
+// to a per-instance log under the config dir so a failure can be diagnosed.
+func (i *Instance) runSetupCommand() error {
+	if i.SetupCommand == "" {
+		return nil
+	}
+	logPath, err := RunSetupCommand(i.SetupCommand, i.gitWorktree.GetWorktreePath(), i.Title)
+	if err != nil {
+		return fmt.Errorf("setup command failed (log: %s): %w", logPath, err)
+	}
+	return nil
+}
+
+// RunSetupCommand runs command with the user's shell in dir, streaming combined
+// output to a log file named after the instance. Returns the log path.
+func RunSetupCommand(command, dir, title string) (string, error) {
+	configDir, err := config.GetConfigDir()
+	if err != nil {
+		return "", err
+	}
+	logDir := filepath.Join(configDir, "setup-logs")
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		return "", err
+	}
+	safeTitle := strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' {
+			return r
+		}
+		return '_'
+	}, title)
+	logPath := filepath.Join(logDir, safeTitle+".log")
+	logFile, err := os.Create(logPath)
+	if err != nil {
+		return "", err
+	}
+	defer logFile.Close()
+
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		shell = "/bin/sh"
+	}
+	fmt.Fprintf(logFile, "$ %s\n(in %s)\n\n", command, dir)
+	cmd := exec.Command(shell, "-lc", command)
+	cmd.Dir = dir
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	if err := cmd.Run(); err != nil {
+		return logPath, err
+	}
+	return logPath, nil
+}
+
 // CloseTmux kills the tmux session (and the program in it) while leaving the
 // worktree and branch alone. A later Resume starts a fresh session with
 // ResumeProgram, so for ticket instances the Claude conversation carries over.
@@ -634,6 +700,10 @@ func (i *Instance) Resume() error {
 		if err := i.gitWorktree.Setup(); err != nil {
 			log.ErrorLog.Print(err)
 			return fmt.Errorf("failed to setup git worktree: %w", err)
+		}
+		if err := i.runSetupCommand(); err != nil {
+			log.ErrorLog.Print(err)
+			return err
 		}
 	}
 
