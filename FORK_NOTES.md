@@ -96,7 +96,7 @@ File: `~/.claude-squad/status/<ISSUE-ID>.json`
   },
   "spawn": {
     "program": "claude \"/triage-linear-ticket {ISSUE_ID}\"",
-    "repo_path": "/home/yaroslav/agent1/backend",
+    "repo_path": "/home/yaroslav/.claude-squad/repos/backend",
     "branch_prefix": "agent/",
     "setup_command": "pnpm install --frozen-lockfile"
   },
@@ -105,6 +105,10 @@ File: `~/.claude-squad/status/<ISSUE-ID>.json`
 ```
 
 - `LINEAR_API_KEY` in the environment overrides `linear.api_key`.
+- `spawn.repo_path` should be a clone dedicated to `cs`, not a checkout anyone works
+  in: every spawn runs `git fetch` there and creates branches and worktrees from it.
+  `cs reset` only clears `~/.claude-squad/worktrees`, so a clone under
+  `~/.claude-squad/repos/` survives it.
 - `view_id` is the view's UUID or the slug id that ends its URL
   (`linear.app/<ws>/team/<team>/view/<name>-<slugId>` → `<slugId>`).
 - The view is the only filter: every issue it returns gets a session. Exclude
