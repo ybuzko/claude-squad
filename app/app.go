@@ -70,6 +70,11 @@ type home struct {
 	appState config.AppState
 	// dispatcher polls Linear and spawns ticket sessions. nil when Linear is disabled.
 	dispatcher *dispatcher
+	// archive holds archived ticket sessions; showArchive puts it in the left pane.
+	archive     *ui.List
+	showArchive bool
+	// confirmedCmd is the Cmd produced by a confirmThen action, run once the dialog closes.
+	confirmedCmd tea.Cmd
 
 	// -- State --
 
@@ -150,6 +155,8 @@ func newHome(ctx context.Context, program string, autoYes bool, forceLinear bool
 	h.list = ui.NewList(&h.spinner, autoYes)
 	h.list.SetLinearMode(dispatcher != nil)
 	h.menu.SetLinearMode(dispatcher != nil)
+	h.archive = ui.NewList(&h.spinner, false)
+	h.archive.SetTitle(" Archive ")
 
 	// Load saved instances
 	instances, err := storage.LoadInstances()
@@ -160,6 +167,10 @@ func newHome(ctx context.Context, program string, autoYes bool, forceLinear bool
 
 	// Add loaded instances to the list
 	for _, instance := range instances {
+		if instance.Archived {
+			h.archive.AddInstance(instance)()
+			continue
+		}
 		// Call the finalizer immediately.
 		h.list.AddInstance(instance)()
 		if autoYes {
@@ -184,6 +195,7 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 
 	m.tabbedWindow.SetSize(tabsWidth, contentHeight)
 	m.list.SetSize(listWidth, contentHeight)
+	m.archive.SetSize(listWidth, contentHeight)
 
 	if m.textInputOverlay != nil {
 		m.textInputOverlay.SetSize(int(float32(msg.Width)*0.6), int(float32(msg.Height)*0.4))
@@ -242,7 +254,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Save after successful start.
-		if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+		if err := m.saveInstances(); err != nil {
 			return m, m.handleError(err)
 		}
 
@@ -295,7 +307,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.drainPending()...)
 		}
 		if persist {
-			if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+			if err := m.saveInstances(); err != nil {
 				cmds = append(cmds, m.handleError(err))
 			}
 		}
@@ -307,11 +319,25 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handlePollDone(msg)
 	case trustPromptCheckMsg:
 		return m, m.handleTrustPromptCheck(msg)
+	case ticketArchivedMsg:
+		return m, m.handleTicketArchived(msg)
+	case ticketRestoredMsg:
+		return m, m.handleTicketRestored(msg)
+	case resumePromptMsg:
+		return m, m.handleResumePrompt(msg)
+	case archivedDeletedMsg:
+		if msg.err != nil {
+			return m, m.handleError(fmt.Errorf("deleting %s: %w", msg.title, msg.err))
+		}
+		return m, nil
 	case ticketLookupDoneMsg:
 		if msg.err != nil {
 			return m, m.handleError(msg.err)
 		}
-		cmd, err := m.spawnTicket(msg.issue)
+		if archived := m.archive.FindByTitle(msg.issue.Identifier); archived != nil {
+			return m, m.restoreTicket(archived, m.resumePrompt(archived.IssueID))
+		}
+		cmd, err := m.spawnTicket(msg.issue, false)
 		if err != nil {
 			return m, m.handleError(err)
 		}
@@ -373,7 +399,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, tea.Batch(m.handleError(msg.err), m.instanceChanged())
 			}
-			if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+			if err := m.saveInstances(); err != nil {
 				return m, m.handleError(err)
 			}
 			return m, tea.Batch(tea.WindowSize(), m.instanceChanged(), m.trustPromptCheckCmd(msg.instance, 0))
@@ -388,7 +414,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Save after successful start
-		if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+		if err := m.saveInstances(); err != nil {
 			return m, m.handleError(err)
 		}
 		if m.autoYes {
@@ -421,7 +447,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *home) handleQuit() (tea.Model, tea.Cmd) {
-	if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+	if err := m.saveInstances(); err != nil {
 		return m, m.handleError(err)
 	}
 	return m, tea.Quit
@@ -672,9 +698,15 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		if shouldClose {
 			m.state = stateDefault
 			m.confirmationOverlay = nil
-			return m, nil
+			cmd := m.confirmedCmd
+			m.confirmedCmd = nil
+			return m, cmd
 		}
 		return m, nil
+	}
+
+	if m.showArchive {
+		return m.handleArchiveKey(msg)
 	}
 
 	// Exit scrolling mode when ESC is pressed and preview pane is in scrolling mode
@@ -711,6 +743,11 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	switch name {
 	case keys.KeyHelp:
 		return m.showHelpScreen(helpTypeGeneral{}, nil)
+	case keys.KeyArchiveView:
+		if m.dispatcher == nil {
+			return m, nil
+		}
+		return m, m.toggleArchive()
 	case keys.KeyTicket:
 		if m.dispatcher == nil {
 			return m, nil
@@ -792,31 +829,18 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, m.instanceChanged()
 	case keys.KeyKill:
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.Status == session.Loading {
+		if selected == nil || selected.Status == session.Loading || selected.Restoring {
 			return m, nil
 		}
 
-		// A live ticket session is paused rather than killed so its branch and Claude
-		// conversation survive; a second D on the paused (or done) instance deletes it.
-		if selected.IsTicket() && !selected.Paused() && selected.Status != session.Done {
-			pauseAction := func() tea.Msg {
-				if err := selected.Pause(); err != nil {
-					return err
-				}
-				// Upstream Pause leaves the program running in the removed worktree
-				// directory. End it so Resume relaunches Claude with --resume in a
-				// fresh checkout instead of a stale cwd.
-				if err := selected.CloseTmux(); err != nil {
-					return err
-				}
-				m.tabbedWindow.CleanupTerminalForInstance(selected.Title)
-				if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
-					return err
-				}
-				return instanceChangedMsg{}
-			}
-			message := fmt.Sprintf("[!] Pause ticket session '%s'? (branch kept; press D again to delete)", selected.Title)
-			return m, m.confirmAction(message, pauseAction)
+		// Ticket sessions are archived, never deleted from here: the branch, worktree
+		// path and Claude conversation are kept so the ticket can pick up where it left
+		// off. Permanent deletion lives in the archive view.
+		if selected.IsTicket() {
+			message := fmt.Sprintf("[!] Archive ticket session '%s'? (context kept; `a` shows the archive)", selected.Title)
+			return m, m.confirmThen(message, func() tea.Cmd {
+				return tea.Batch(m.archiveTicket(selected, false), m.instanceChanged())
+			})
 		}
 
 		// Create the kill action as a tea.Cmd
@@ -892,7 +916,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, nil
 	case keys.KeyMoveUp:
 		if m.list.MoveUp() {
-			if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+			if err := m.saveInstances(); err != nil {
 				return m, m.handleError(err)
 			}
 			return m, m.instanceChanged()
@@ -900,7 +924,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, nil
 	case keys.KeyMoveDown:
 		if m.list.MoveDown() {
-			if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+			if err := m.saveInstances(); err != nil {
 				return m, m.handleError(err)
 			}
 			return m, m.instanceChanged()
@@ -908,7 +932,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, nil
 	case keys.KeyResume:
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.Status == session.Loading {
+		if selected == nil || selected.Status == session.Loading || selected.Restoring {
 			return m, nil
 		}
 		if err := selected.Resume(); err != nil {
@@ -957,7 +981,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 // Cmd if there was any error.
 func (m *home) instanceChanged() tea.Cmd {
 	// selected may be nil
-	selected := m.list.GetSelectedInstance()
+	selected := m.activeList().GetSelectedInstance()
 
 	m.tabbedWindow.UpdateDiff(selected)
 	m.tabbedWindow.SetInstance(selected)
@@ -1207,7 +1231,7 @@ func (m *home) confirmAction(message string, action tea.Cmd) tea.Cmd {
 }
 
 func (m *home) View() string {
-	listWithPadding := lipgloss.NewStyle().PaddingTop(1).Render(m.list.String())
+	listWithPadding := lipgloss.NewStyle().PaddingTop(1).Render(m.activeList().String())
 	previewWithPadding := lipgloss.NewStyle().PaddingTop(1).Render(m.tabbedWindow.String())
 	listAndPreview := lipgloss.JoinHorizontal(lipgloss.Top, listWithPadding, previewWithPadding)
 

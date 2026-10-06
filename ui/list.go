@@ -85,6 +85,8 @@ type List struct {
 	autoyes       bool
 	// linearMode enables the blocked/idle header counts and the urgency sort.
 	linearMode bool
+	// title is the header text; the archive list uses its own.
+	title string
 
 	// map of repo name to number of instances using it. Used to display the repo name only if there are
 	// multiple repos in play.
@@ -208,6 +210,25 @@ func (r *InstanceRenderer) setWidth(width int) {
 	r.width = AdjustPreviewWidth(width)
 }
 
+// statusGlyph is the icon shown after an instance's title for its status.
+func (r *InstanceRenderer) statusGlyph(i *session.Instance) string {
+	var join string
+	switch i.Status {
+	case session.Running, session.Loading:
+		join = fmt.Sprintf("%s ", r.spinner.View())
+	case session.Ready:
+		join = readyStyle.Render(readyIcon)
+	case session.Paused:
+		join = pausedStyle.Render(pausedIcon)
+	case session.Blocked:
+		join = blockedStyle.Render(blockedIcon)
+	case session.Done:
+		join = doneStyle.Render(doneIcon)
+	default:
+	}
+	return join
+}
+
 // ɹ and ɻ are other options.
 const branchIcon = "Ꮧ"
 
@@ -223,20 +244,10 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 		descS = listDescStyle
 	}
 
-	// add spinner next to title if it's running
-	var join string
-	switch i.Status {
-	case session.Running, session.Loading:
+	// add spinner next to title if it's running (or being restored from the archive)
+	join := r.statusGlyph(i)
+	if i.Restoring {
 		join = fmt.Sprintf("%s ", r.spinner.View())
-	case session.Ready:
-		join = readyStyle.Render(readyIcon)
-	case session.Paused:
-		join = pausedStyle.Render(pausedIcon)
-	case session.Blocked:
-		join = blockedStyle.Render(blockedIcon)
-	case session.Done:
-		join = doneStyle.Render(doneIcon)
-	default:
 	}
 
 	// Cut the title if it's too long
@@ -326,8 +337,53 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 	return text
 }
 
+// SetTitle replaces the header text (default " Instances ").
+func (l *List) SetTitle(title string) {
+	l.title = title
+}
+
+// Remove takes an instance out of the list without killing it, keeping the selection
+// on the same instance where possible. Returns false if it was not in the list.
+func (l *List) Remove(target *session.Instance) bool {
+	idx := -1
+	for i, inst := range l.items {
+		if inst == target {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return false
+	}
+	if repoName, err := target.RepoName(); err == nil {
+		l.rmRepo(repoName)
+	}
+	l.items = append(l.items[:idx], l.items[idx+1:]...)
+	if idx < l.selectedIdx || l.selectedIdx >= len(l.items) {
+		l.selectedIdx--
+	}
+	if l.selectedIdx < 0 {
+		l.selectedIdx = 0
+	}
+	return true
+}
+
+// Prepend adds an already-started instance at the top of the list (newest first).
+func (l *List) Prepend(instance *session.Instance) {
+	l.items = append([]*session.Instance{instance}, l.items...)
+	if len(l.items) > 1 {
+		l.selectedIdx++
+	}
+	if repoName, err := instance.RepoName(); err == nil {
+		l.addRepo(repoName)
+	}
+}
+
 func (l *List) String() string {
-	const titleText = " Instances "
+	titleText := " Instances "
+	if l.title != "" {
+		titleText = l.title
+	}
 	const autoYesText = " auto-yes "
 
 	// Write the title.

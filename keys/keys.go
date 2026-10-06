@@ -35,6 +35,15 @@ const (
 
 	// KeyTicket starts a session for a Linear ticket by id (Linear mode only).
 	KeyTicket
+	// KeyArchiveView toggles the archive of ticket sessions (Linear mode only).
+	KeyArchiveView
+
+	// Menu-only labels for keys whose meaning changes with context. They share a key
+	// with an entry above and are not in GlobalKeyStringsMap.
+	KeyArchiveTicket // D on a ticket session
+	KeyRestore       // r in the archive
+	KeyDeleteForever // D in the archive
+	KeyArchiveBack   // a in the archive
 )
 
 // GlobalKeyStringsMap is a global, immutable map string to keybinding.
@@ -59,6 +68,7 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"p":          KeySubmit,
 	"?":          KeyHelp,
 	"t":          KeyTicket,
+	"a":          KeyArchiveView,
 }
 
 // GlobalkeyBindings is a global, immutable map of KeyName tot keybinding.
@@ -131,6 +141,26 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeyTicket: key.NewBinding(
 		key.WithKeys("t"),
 		key.WithHelp("t", "new ticket"),
+	),
+	KeyArchiveView: key.NewBinding(
+		key.WithKeys("a"),
+		key.WithHelp("a", "archived"),
+	),
+	KeyArchiveTicket: key.NewBinding(
+		key.WithKeys("D"),
+		key.WithHelp("D", "archive"),
+	),
+	KeyRestore: key.NewBinding(
+		key.WithKeys("r"),
+		key.WithHelp("r", "restore"),
+	),
+	KeyDeleteForever: key.NewBinding(
+		key.WithKeys("D"),
+		key.WithHelp("D", "delete forever"),
+	),
+	KeyArchiveBack: key.NewBinding(
+		key.WithKeys("a", "esc"),
+		key.WithHelp("a/esc", "back"),
 	),
 
 	// -- Special keybindings --

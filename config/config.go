@@ -63,6 +63,10 @@ type SpawnConfig struct {
 	// starts (and again when a paused session's worktree is recreated), e.g.
 	// "pnpm install --frozen-lockfile". Empty disables it.
 	SetupCommand string `json:"setup_command,omitempty"`
+	// ResumePrompt is sent to Claude when an archived ticket session is brought back
+	// because its ticket returned to the view (or was requested with `t`). {ISSUE_ID}
+	// is substituted.
+	ResumePrompt string `json:"resume_prompt,omitempty"`
 }
 
 // Config represents the application configuration
@@ -89,6 +93,9 @@ const (
 	defaultLinearMaxConcurrent   = 5
 	defaultSpawnProgram          = `claude "/triage-linear-ticket {ISSUE_ID}"`
 	defaultSpawnBranchPrefix     = "agent/"
+	defaultSpawnResumePrompt     = "{ISSUE_ID} is back in your queue (reopened or requested again). " +
+		"Re-read the ticket and any comments added since you last looked, re-check your earlier " +
+		"findings against current origin/main and current data, then continue from where you left off."
 )
 
 // applyDefaults fills zero-valued fields so configs written by older versions keep
@@ -111,6 +118,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Spawn.BranchPrefix == "" {
 		c.Spawn.BranchPrefix = defaultSpawnBranchPrefix
+	}
+	if c.Spawn.ResumePrompt == "" {
+		c.Spawn.ResumePrompt = defaultSpawnResumePrompt
 	}
 }
 

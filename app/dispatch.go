@@ -127,8 +127,9 @@ func (m *home) runPollCmd() tea.Cmd {
 	}
 }
 
-// handlePollDone applies done-state transitions, rebuilds the pending queue, and
-// spawns whatever the concurrency cap allows. It always reschedules the next poll.
+// handlePollDone applies done-state labels, archives sessions whose ticket left the
+// view, rebuilds the queue of tickets that need a session (new or returning from the
+// archive), and starts whatever the concurrency cap allows. It always reschedules.
 func (m *home) handlePollDone(msg linearPollDoneMsg) tea.Cmd {
 	d := m.dispatcher
 	d.polling = false
@@ -137,15 +138,24 @@ func (m *home) handlePollDone(msg linearPollDoneMsg) tea.Cmd {
 	}
 
 	var cmds []tea.Cmd
-	if m.applyTicketStates(msg.live) {
-		if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+	persist := m.applyTicketStates(msg.live)
+
+	plan := planView(msg.view, m.list.GetInstances(), m.archive.GetInstances())
+	persist = persist || plan.changed
+	for _, inst := range plan.archive {
+		log.InfoLog.Printf("%s left the view; archiving its session", inst.IssueID)
+		cmds = append(cmds, m.archiveTicket(inst, true))
+	}
+	if len(plan.archive) > 0 {
+		cmds = append(cmds, m.instanceChanged())
+	}
+	if persist {
+		if err := m.saveInstances(); err != nil {
 			cmds = append(cmds, m.handleError(err))
 		}
 	}
 
-	d.pending = linear.NewIssues(msg.view, func(id string) bool {
-		return m.list.FindByTitle(id) != nil
-	})
+	d.pending = plan.queue
 	cmds = append(cmds, m.drainPending()...)
 	cmds = append(cmds, m.schedulePollCmd())
 	return tea.Batch(cmds...)
@@ -182,14 +192,15 @@ func (m *home) applyTicketStates(live []linear.Issue) bool {
 func (m *home) workingCount() int {
 	n := 0
 	for _, inst := range m.list.GetInstances() {
-		if inst.Status == session.Running || inst.Status == session.Loading {
+		if isBusy(inst) {
 			n++
 		}
 	}
 	return n
 }
 
-// drainPending spawns queued tickets while capacity allows.
+// drainPending starts queued tickets while capacity allows: archived ones are
+// restored with the resume prompt, the rest get a fresh session.
 func (m *home) drainPending() []tea.Cmd {
 	d := m.dispatcher
 	if d == nil {
@@ -204,7 +215,12 @@ func (m *home) drainPending() []tea.Cmd {
 		if m.list.FindByTitle(issue.Identifier) != nil {
 			continue
 		}
-		cmd, err := m.spawnTicket(issue)
+		if archived := m.archive.FindByTitle(issue.Identifier); archived != nil {
+			archived.InView = true
+			cmds = append(cmds, m.restoreTicket(archived, m.resumePrompt(issue.Identifier)))
+			continue
+		}
+		cmd, err := m.spawnTicket(issue, true)
 		if err != nil {
 			cmds = append(cmds, m.handleError(err))
 			continue
@@ -233,9 +249,11 @@ func ticketBranchName(prefix string, issue linear.Issue) string {
 // spawnTicket creates and starts an instance for a Linear issue through the regular
 // instance creation path. The returned Cmd runs Start in the background and reports
 // via instanceStartedMsg with autoSpawned set.
-func (m *home) spawnTicket(issue linear.Issue) (tea.Cmd, error) {
+// inView marks a ticket that came from the view, so the poller archives the session
+// once the ticket leaves it; `t` spawns pass false and the next poll settles it.
+func (m *home) spawnTicket(issue linear.Issue, inView bool) (tea.Cmd, error) {
 	d := m.dispatcher
-	if m.list.FindByTitle(issue.Identifier) != nil {
+	if m.list.FindByTitle(issue.Identifier) != nil || m.archive.FindByTitle(issue.Identifier) != nil {
 		return nil, fmt.Errorf("an instance for %s already exists", issue.Identifier)
 	}
 	if m.list.NumInstances() >= m.instanceLimit() {
@@ -262,6 +280,7 @@ func (m *home) spawnTicket(issue linear.Issue) (tea.Cmd, error) {
 	if err != nil {
 		return nil, err
 	}
+	instance.InView = inView
 
 	finalize := m.list.AddInstance(instance)
 	instance.SetStatus(session.Loading)
@@ -355,4 +374,78 @@ func (m *home) workPath() string {
 		return m.dispatcher.cfg.Spawn.RepoPath
 	}
 	return "."
+}
+
+// viewPlan is what one poll of the view asks the dispatcher to do.
+type viewPlan struct {
+	// archive holds live ticket instances whose ticket left the view and that are not
+	// mid-turn. Busy ones are left for a later poll (their InView stays true).
+	archive []*session.Instance
+	// queue holds view issues, in view order, that need a session: archived tickets
+	// that came back into the view, and tickets with no instance at all.
+	queue []linear.Issue
+	// changed is true when some instance's InView flag was updated and should be saved.
+	changed bool
+}
+
+// isBusy reports whether an instance is in the middle of work that archiving would cut off.
+func isBusy(inst *session.Instance) bool {
+	return inst.Status == session.Running || inst.Status == session.Loading || inst.Restoring
+}
+
+// planView compares the view with what each ticket instance last saw and acts only on
+// changes: a live session whose ticket left the view is archived, an archived one whose
+// ticket came back is restored. A session archived by hand while its ticket was still
+// in the view stays archived until the ticket leaves and returns. Tickets started with
+// `t` from outside the view are never archived by the poller.
+func planView(view []linear.Issue, active, archived []*session.Instance) viewPlan {
+	var plan viewPlan
+	inView := make(map[string]bool, len(view))
+	for _, is := range view {
+		inView[is.Identifier] = true
+	}
+
+	byID := make(map[string]*session.Instance)
+	for _, inst := range active {
+		if !inst.IsTicket() {
+			continue
+		}
+		byID[inst.IssueID] = inst
+		present := inView[inst.IssueID]
+		switch {
+		case present && !inst.InView:
+			inst.InView = true
+			plan.changed = true
+		case !present && inst.InView:
+			if !isBusy(inst) {
+				plan.archive = append(plan.archive, inst)
+			}
+		}
+	}
+
+	restore := make(map[string]bool)
+	for _, inst := range archived {
+		if !inst.IsTicket() {
+			continue
+		}
+		if _, live := byID[inst.IssueID]; live {
+			continue
+		}
+		byID[inst.IssueID] = inst
+		present := inView[inst.IssueID]
+		switch {
+		case present && !inst.InView:
+			restore[inst.IssueID] = true
+		case !present && inst.InView:
+			inst.InView = false
+			plan.changed = true
+		}
+	}
+
+	for _, is := range view {
+		if _, known := byID[is.Identifier]; !known || restore[is.Identifier] {
+			plan.queue = append(plan.queue, is)
+		}
+	}
+	return plan
 }

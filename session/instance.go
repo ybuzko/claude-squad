@@ -74,6 +74,17 @@ type Instance struct {
 	// SetupCommand runs in the worktree whenever it is (re)created, before the program.
 	SetupCommand string
 
+	// Archived ticket instances are paused and kept out of the active list so their
+	// branch, worktree path and Claude session survive until the ticket comes back.
+	Archived   bool
+	ArchivedAt time.Time
+	// InView records whether the ticket was in the Linear view at the last poll. The
+	// dispatcher acts only on changes: leaving the view archives, returning restores.
+	InView bool
+	// Restoring is true while an archived instance is being brought back (worktree,
+	// setup command, tmux). Not persisted.
+	Restoring bool
+
 	// DiffStats stores the current git diff statistics
 	diffStats *git.DiffStats
 
@@ -112,6 +123,9 @@ func (i *Instance) ToInstanceData() InstanceData {
 		IssueURL:        i.IssueURL,
 		ClaudeSessionID: i.ClaudeSessionID,
 		SetupCommand:    i.SetupCommand,
+		Archived:        i.Archived,
+		ArchivedAt:      i.ArchivedAt,
+		InView:          i.InView,
 	}
 
 	// Only include worktree data if gitWorktree is initialized
@@ -156,6 +170,9 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		IssueURL:        data.IssueURL,
 		ClaudeSessionID: data.ClaudeSessionID,
 		SetupCommand:    data.SetupCommand,
+		Archived:        data.Archived,
+		ArchivedAt:      data.ArchivedAt,
+		InView:          data.InView,
 
 		gitWorktree: git.NewGitWorktreeFromStorage(
 			data.Worktree.RepoPath,
@@ -656,6 +673,19 @@ func RunSetupCommand(command, dir, title string) (string, error) {
 		return logPath, err
 	}
 	return logPath, nil
+}
+
+// StopForArchive pauses a live instance (committing any uncommitted work to its branch
+// and removing the worktree) and ends its tmux session, so nothing keeps running while
+// it is archived. The branch, worktree path and Claude session id are kept, which is
+// what Resume needs to continue the same conversation later.
+func (i *Instance) StopForArchive() error {
+	if i.Status != Paused {
+		if err := i.Pause(); err != nil {
+			return err
+		}
+	}
+	return i.CloseTmux()
 }
 
 // CloseTmux kills the tmux session (and the program in it) while leaving the

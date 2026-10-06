@@ -29,6 +29,10 @@ type InstanceData struct {
 	IssueURL        string `json:"issue_url,omitempty"`
 	ClaudeSessionID string `json:"claude_session_id,omitempty"`
 	SetupCommand    string `json:"setup_command,omitempty"`
+
+	Archived   bool      `json:"archived,omitempty"`
+	ArchivedAt time.Time `json:"archived_at,omitempty"`
+	InView     bool      `json:"in_view,omitempty"`
 }
 
 // GitWorktreeData represents the serializable data of a GitWorktree

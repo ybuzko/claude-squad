@@ -58,6 +58,17 @@ func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 	case instance.Status == session.Loading:
 		p.setFallbackState("Setting up workspace...")
 		return nil
+	case instance.Restoring:
+		p.setFallbackState("Restoring archived session: recreating the worktree, running setup, resuming Claude...")
+		return nil
+	case instance.Archived:
+		p.setFallbackState(lipgloss.JoinVertical(lipgloss.Center,
+			fmt.Sprintf("Archived %s.", instance.ArchivedAt.Format("Jan 2 15:04")),
+			"",
+			"Press 'r' to restore it: the worktree comes back and Claude resumes the same conversation.",
+			fmt.Sprintf("Branch: %s", instance.Branch),
+		))
+		return nil
 	case instance.Status == session.Paused:
 		p.setFallbackState(lipgloss.JoinVertical(lipgloss.Center,
 			"Session is paused. Press 'r' to resume.",

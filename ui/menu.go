@@ -53,7 +53,17 @@ type Menu struct {
 	keyDown keys.KeyName
 	// linearMode adds the ticket keybinding to the menu.
 	linearMode bool
+	// archiveMode shows the archive's keys (restore, delete, back) instead.
+	archiveMode bool
 }
+
+// SetArchiveMode switches the menu to the archive view's keys and back.
+func (m *Menu) SetArchiveMode(enabled bool) {
+	m.archiveMode = enabled
+	m.updateOptions()
+}
+
+var archiveMenuOptions = []keys.KeyName{keys.KeyArchiveBack, keys.KeyRestore, keys.KeyDeleteForever, keys.KeyHelp, keys.KeyQuit}
 
 // SetLinearMode toggles the Linear-specific menu entries.
 func (m *Menu) SetLinearMode(enabled bool) {
@@ -110,6 +120,10 @@ func (m *Menu) SetActiveTab(tab int) {
 
 // updateOptions updates the menu options based on current state and instance
 func (m *Menu) updateOptions() {
+	if m.archiveMode && (m.state == StateDefault || m.state == StateEmpty) {
+		m.options = archiveMenuOptions
+		return
+	}
 	switch m.state {
 	case StateEmpty:
 		m.options = defaultMenuOptions
@@ -138,7 +152,11 @@ func (m *Menu) addInstanceOptions() {
 	// Instance management group
 	options := []keys.KeyName{keys.KeyNew, keys.KeyKill}
 	if m.linearMode {
-		options = []keys.KeyName{keys.KeyNew, keys.KeyTicket, keys.KeyKill}
+		kill := keys.KeyKill
+		if m.instance.IsTicket() {
+			kill = keys.KeyArchiveTicket
+		}
+		options = []keys.KeyName{keys.KeyNew, keys.KeyTicket, kill, keys.KeyArchiveView}
 	}
 
 	// Action group
@@ -173,18 +191,24 @@ func (m *Menu) SetSize(width, height int) {
 func (m *Menu) String() string {
 	var s strings.Builder
 
-	// Define group boundaries. Linear mode adds `t` to the management group.
+	// Define group boundaries. Linear mode adds `t` and `a` to the management group.
 	mgmt := 2
 	if m.linearMode {
-		mgmt = 3
+		mgmt = 4
 	}
 	groups := []struct {
 		start int
 		end   int
 	}{
-		{0, mgmt},            // Instance management group (n, [t], d)
+		{0, mgmt},            // Instance management group (n, [t], d, [a])
 		{mgmt, mgmt + 3},     // Action group (enter, submit, pause/resume)
 		{mgmt + 4, mgmt + 6}, // System group (tab, help, q)
+	}
+	if m.archiveMode && m.state != StateNewInstance && m.state != StatePrompt {
+		groups = []struct {
+			start int
+			end   int
+		}{{0, 1}, {1, 3}, {3, 5}} // back | restore, delete | help, quit
 	}
 
 	for i, k := range m.options {
@@ -202,8 +226,8 @@ func (m *Menu) String() string {
 		}
 
 		var inActionGroup bool
-		switch m.state {
-		case StateEmpty:
+		switch {
+		case m.state == StateEmpty && !m.archiveMode:
 			// For empty state, the action group is the first group
 			inActionGroup = i <= 1
 		default:

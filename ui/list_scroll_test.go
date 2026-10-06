@@ -84,3 +84,39 @@ func TestListOffsetClampsAfterItemsRemoved(t *testing.T) {
 	assert.Contains(t, out, "TSA-100")
 	assert.NotContains(t, out, "more")
 }
+
+func TestRemoveKeepsSelectionOnSameInstance(t *testing.T) {
+	l := newScrollList(4, 40, 20) // TSA-100..103
+	l.SetSelectedInstance(2)
+	selected := l.GetSelectedInstance()
+
+	assert.True(t, l.Remove(l.items[0]))
+	assert.Same(t, selected, l.GetSelectedInstance())
+
+	assert.True(t, l.Remove(selected))
+	assert.Equal(t, "TSA-103", l.GetSelectedInstance().Title, "selection moves to the next item")
+
+	assert.True(t, l.Remove(l.GetSelectedInstance()))
+	assert.Equal(t, "TSA-101", l.GetSelectedInstance().Title, "removing the last item selects the previous one")
+
+	assert.False(t, l.Remove(&session.Instance{Title: "missing"}))
+}
+
+func TestPrependPutsNewestFirstAndKeepsSelection(t *testing.T) {
+	l := newScrollList(2, 40, 20)
+	l.SetSelectedInstance(1)
+	selected := l.GetSelectedInstance()
+
+	l.Prepend(&session.Instance{Title: "TSA-999"})
+	assert.Equal(t, "TSA-999", l.items[0].Title)
+	assert.Same(t, selected, l.GetSelectedInstance())
+}
+
+func TestListTitle(t *testing.T) {
+	l := newScrollList(1, 40, 10)
+	assert.Contains(t, ansi.Strip(l.String()), "Instances")
+	l.SetTitle(" Archive ")
+	out := ansi.Strip(l.String())
+	assert.Contains(t, out, "Archive")
+	assert.NotContains(t, out, "Instances")
+}
