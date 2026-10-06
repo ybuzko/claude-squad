@@ -475,12 +475,15 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		if msg.String() == "ctrl+c" {
 			return m, m.closeTicketOverlay()
 		}
-		shouldClose, _ := m.textInputOverlay.HandleKeyPress(msg)
-		if !shouldClose {
-			return m, nil
-		}
-		if m.textInputOverlay.IsCanceled() {
-			return m, m.closeTicketOverlay()
+		// An issue id is a single line, so Enter submits instead of inserting a newline.
+		if msg.Type != tea.KeyEnter {
+			shouldClose, _ := m.textInputOverlay.HandleKeyPress(msg)
+			if !shouldClose {
+				return m, nil
+			}
+			if m.textInputOverlay.IsCanceled() {
+				return m, m.closeTicketOverlay()
+			}
 		}
 		identifier := strings.ToUpper(strings.TrimSpace(m.textInputOverlay.GetValue()))
 		closeCmd := m.closeTicketOverlay()
@@ -796,6 +799,12 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		if selected.IsTicket() && !selected.Paused() && selected.Status != session.Done {
 			pauseAction := func() tea.Msg {
 				if err := selected.Pause(); err != nil {
+					return err
+				}
+				// Upstream Pause leaves the program running in the removed worktree
+				// directory. End it so Resume relaunches Claude with --resume in a
+				// fresh checkout instead of a stale cwd.
+				if err := selected.CloseTmux(); err != nil {
 					return err
 				}
 				m.tabbedWindow.CleanupTerminalForInstance(selected.Title)

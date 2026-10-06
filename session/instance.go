@@ -592,6 +592,19 @@ func (i *Instance) Pause() error {
 	return nil
 }
 
+// CloseTmux kills the tmux session (and the program in it) while leaving the
+// worktree and branch alone. A later Resume starts a fresh session with
+// ResumeProgram, so for ticket instances the Claude conversation carries over.
+func (i *Instance) CloseTmux() error {
+	if !i.started || i.tmuxSession == nil {
+		return nil
+	}
+	if !i.tmuxSession.DoesSessionExist() {
+		return nil
+	}
+	return i.tmuxSession.Close()
+}
+
 // Resume recreates the worktree and restarts the tmux session
 func (i *Instance) Resume() error {
 	if !i.started {

@@ -42,6 +42,12 @@ Merge the `hooks` object from `hooks/claude-settings.snippet.json` into
 `~/.claude/settings.json`. Since `cs hook` exits immediately when `CS_ISSUE_ID` is
 unset, the hooks are inert in every Claude Code session the dispatcher did not start.
 
+Verified live against the TSA "Mine" view: auto-spawn with the concurrency cap,
+hook-driven idle/blocked, pause → `claude --resume` after the tmux server lost the
+session, `t` spawn of a ticket outside the poller's reach, Done detection, delete.
+Claude Code did **not** show a trust dialog for worktrees of an already-trusted repo;
+the auto-dismiss stays in as a safety net.
+
 ## Keys added or changed in Linear mode
 
 | Key | Behaviour |

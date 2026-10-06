@@ -7,7 +7,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 )
+
+// fetchMu serializes `git fetch` across worktrees being set up at the same time.
+var fetchMu sync.Mutex
 
 // Setup creates a new worktree for the session
 func (g *GitWorktree) Setup() error {
@@ -93,7 +97,12 @@ func (g *GitWorktree) setupNewWorktree() error {
 	if baseRef == "" {
 		baseRef = "HEAD"
 	} else if remoteBranch, ok := strings.CutPrefix(baseRef, "origin/"); ok {
-		if _, err := g.runGitCommand(g.repoPath, "fetch", "origin", remoteBranch); err != nil {
+		// Instances start in parallel; concurrent fetches of the same ref make git
+		// reject the second update ("incorrect old value provided").
+		fetchMu.Lock()
+		_, err := g.runGitCommand(g.repoPath, "fetch", "origin", remoteBranch)
+		fetchMu.Unlock()
+		if err != nil {
 			return fmt.Errorf("failed to fetch origin/%s: %w", remoteBranch, err)
 		}
 	}
