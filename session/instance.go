@@ -66,6 +66,10 @@ type Instance struct {
 	// IssueUUID is the Linear issue UUID, used for state lookups.
 	IssueUUID string
 	IssueURL  string
+	// IssueTitle and IssueDueDate (YYYY-MM-DD, empty if none) are shown in the list;
+	// every poll refreshes them.
+	IssueTitle   string
+	IssueDueDate string
 	// ClaudeSessionID is the Claude Code session id reported by the SessionStart hook,
 	// used to resume the conversation after the tmux session dies.
 	ClaudeSessionID string
@@ -123,6 +127,8 @@ func (i *Instance) ToInstanceData() InstanceData {
 		IssueURL:        i.IssueURL,
 		ClaudeSessionID: i.ClaudeSessionID,
 		SetupCommand:    i.SetupCommand,
+		IssueTitle:      i.IssueTitle,
+		IssueDueDate:    i.IssueDueDate,
 		Archived:        i.Archived,
 		ArchivedAt:      i.ArchivedAt,
 		InView:          i.InView,
@@ -170,6 +176,8 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		IssueURL:        data.IssueURL,
 		ClaudeSessionID: data.ClaudeSessionID,
 		SetupCommand:    data.SetupCommand,
+		IssueTitle:      data.IssueTitle,
+		IssueDueDate:    data.IssueDueDate,
 		Archived:        data.Archived,
 		ArchivedAt:      data.ArchivedAt,
 		InView:          data.InView,
@@ -219,9 +227,11 @@ type InstanceOptions struct {
 	// BaseRef is the ref a new branch is created from (e.g. "origin/main"; empty = HEAD).
 	BaseRef string
 	// Linear ticket metadata; empty for hand-created instances.
-	IssueID   string
-	IssueUUID string
-	IssueURL  string
+	IssueID      string
+	IssueUUID    string
+	IssueURL     string
+	IssueTitle   string
+	IssueDueDate string
 	// SetupCommand runs in the worktree before the program starts (empty = none).
 	SetupCommand string
 }
@@ -248,6 +258,8 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		IssueID:        opts.IssueID,
 		IssueUUID:      opts.IssueUUID,
 		IssueURL:       opts.IssueURL,
+		IssueTitle:     opts.IssueTitle,
+		IssueDueDate:   opts.IssueDueDate,
 		SetupCommand:   opts.SetupCommand,
 		selectedBranch: opts.Branch,
 		newBranchName:  opts.NewBranchName,

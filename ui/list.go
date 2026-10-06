@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/lipgloss"
@@ -252,6 +253,9 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 
 	// Cut the title if it's too long
 	titleText := i.Title
+	if due := dueLabel(i.IssueDueDate, time.Now()); due != "" {
+		titleText += " (" + due + ")"
+	}
 	widthAvail := r.width - 3 - runewidth.StringWidth(prefix) - 1
 	if widthAvail > 0 && runewidth.StringWidth(titleText) > widthAvail {
 		titleText = runewidth.Truncate(titleText, widthAvail-3, "...")
@@ -283,10 +287,18 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 		)
 	}
 
+	// Ticket sessions show the ticket's title under the id; others show the branch.
+	subtitle := i.Branch
+	icon := branchIcon + "-"
+	if i.IsTicket() && i.IssueTitle != "" {
+		subtitle = i.IssueTitle
+		icon = ""
+	}
+
 	remainingWidth := r.width
 	remainingWidth -= runewidth.StringWidth(prefix)
-	remainingWidth -= runewidth.StringWidth(branchIcon)
-	remainingWidth -= 2 // for the literal " " and "-" in the branchLine format string
+	remainingWidth -= runewidth.StringWidth(icon)
+	remainingWidth -= 1 // for the literal " " in the branchLine format string
 
 	diffWidth := runewidth.StringWidth(addedDiff) + runewidth.StringWidth(removedDiff)
 	if diffWidth > 0 {
@@ -296,7 +308,7 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 	// Use fixed width for diff stats to avoid layout issues
 	remainingWidth -= diffWidth
 
-	branch := i.Branch
+	branch := subtitle
 	if i.Started() && hasMultipleRepos {
 		repoName, err := i.RepoName()
 		if err != nil {
@@ -325,7 +337,7 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 		spaces = strings.Repeat(" ", remainingWidth)
 	}
 
-	branchLine := fmt.Sprintf("%s %s-%s%s%s", strings.Repeat(" ", len(prefix)), branchIcon, branch, spaces, diff)
+	branchLine := fmt.Sprintf("%s %s%s%s%s", strings.Repeat(" ", len(prefix)), icon, branch, spaces, diff)
 
 	// join title and subtitle
 	text := lipgloss.JoinVertical(
@@ -335,6 +347,22 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 	)
 
 	return text
+}
+
+// dueLabel renders a Linear due date (YYYY-MM-DD) as "due 10/5", adding the year when
+// it is not the current one. Empty when there is no due date.
+func dueLabel(date string, now time.Time) string {
+	if date == "" {
+		return ""
+	}
+	d, err := time.Parse("2006-01-02", date)
+	if err != nil {
+		return "due " + date
+	}
+	if d.Year() != now.Year() {
+		return fmt.Sprintf("due %d/%d/%02d", d.Month(), d.Day(), d.Year()%100)
+	}
+	return fmt.Sprintf("due %d/%d", d.Month(), d.Day())
 }
 
 // SetTitle replaces the header text (default " Instances ").

@@ -30,6 +30,9 @@ type InstanceData struct {
 	ClaudeSessionID string `json:"claude_session_id,omitempty"`
 	SetupCommand    string `json:"setup_command,omitempty"`
 
+	IssueTitle   string `json:"issue_title,omitempty"`
+	IssueDueDate string `json:"issue_due_date,omitempty"`
+
 	Archived   bool      `json:"archived,omitempty"`
 	ArchivedAt time.Time `json:"archived_at,omitempty"`
 	InView     bool      `json:"in_view,omitempty"`

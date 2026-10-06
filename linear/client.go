@@ -28,6 +28,8 @@ type Issue struct {
 	// StateType is one of Linear's workflow state types: triage, backlog,
 	// unstarted, started, completed, canceled.
 	StateType string
+	// DueDate is the issue's due date as YYYY-MM-DD, or empty when none is set.
+	DueDate string
 }
 
 type Client struct {
@@ -110,6 +112,7 @@ type issueNode struct {
 	Identifier string `json:"identifier"`
 	Title      string `json:"title"`
 	URL        string `json:"url"`
+	DueDate    string `json:"dueDate"`
 	State      struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
@@ -126,6 +129,7 @@ func (n issueNode) toIssue() Issue {
 		StateID:    n.State.ID,
 		StateName:  n.State.Name,
 		StateType:  n.State.Type,
+		DueDate:    n.DueDate,
 	}
 }
 
@@ -137,7 +141,7 @@ type issueConnection struct {
 	} `json:"pageInfo"`
 }
 
-const issueFields = `id identifier title url state { id name type }`
+const issueFields = `id identifier title url dueDate state { id name type }`
 
 const viewIssuesQuery = `query ViewIssues($viewId: String!, $after: String) {
   customView(id: $viewId) {

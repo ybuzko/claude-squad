@@ -23,7 +23,8 @@ func TestViewIssuesPaginatesAndSendsBareAPIKey(t *testing.T) {
 			"data": map[string]any{"customView": map[string]any{"issues": map[string]any{
 				"nodes": []map[string]any{{
 					"id": "uuid-1", "identifier": "TSA-1", "title": "First", "url": "https://l/1",
-					"state": map[string]any{"id": "s1", "name": "Todo", "type": "unstarted"},
+					"dueDate": "2026-10-05",
+					"state":   map[string]any{"id": "s1", "name": "Todo", "type": "unstarted"},
 				}},
 				"pageInfo": map[string]any{"hasNextPage": true, "endCursor": "c1"},
 			}}},
@@ -53,8 +54,9 @@ func TestViewIssuesPaginatesAndSendsBareAPIKey(t *testing.T) {
 
 	require.Len(t, issues, 2)
 	assert.Equal(t, Issue{ID: "uuid-1", Identifier: "TSA-1", Title: "First", URL: "https://l/1",
-		StateID: "s1", StateName: "Todo", StateType: "unstarted"}, issues[0])
+		StateID: "s1", StateName: "Todo", StateType: "unstarted", DueDate: "2026-10-05"}, issues[0])
 	assert.Equal(t, "TSA-2", issues[1].Identifier)
+	assert.Empty(t, issues[1].DueDate, "no dueDate in the payload: empty")
 }
 
 func TestViewIssuesMissingView(t *testing.T) {

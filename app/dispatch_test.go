@@ -48,3 +48,25 @@ func TestResumeProgram(t *testing.T) {
 	ticket.ClaudeSessionID = "abc-123"
 	assert.Equal(t, "/usr/local/bin/claude --resume abc-123", ticket.ResumeProgram())
 }
+
+func TestRefreshTicketDetails(t *testing.T) {
+	active := &session.Instance{Title: "TSA-1", IssueID: "TSA-1", IssueTitle: "Old"}
+	archived := &session.Instance{Title: "TSA-2", IssueID: "TSA-2", Archived: true}
+	plain := &session.Instance{Title: "scratch"}
+	view := []linear.Issue{
+		{Identifier: "TSA-1", Title: "Renamed", DueDate: "2026-10-05"},
+		{Identifier: "TSA-2", Title: "Second"},
+	}
+
+	assert.True(t, refreshTicketDetails(view, []*session.Instance{active, plain}, []*session.Instance{archived}))
+	assert.Equal(t, "Renamed", active.IssueTitle)
+	assert.Equal(t, "2026-10-05", active.IssueDueDate)
+	assert.Equal(t, "Second", archived.IssueTitle)
+	assert.Empty(t, plain.IssueTitle)
+
+	assert.False(t, refreshTicketDetails(view, []*session.Instance{active}, []*session.Instance{archived}), "no change")
+
+	view[0].DueDate = ""
+	assert.True(t, refreshTicketDetails(view, []*session.Instance{active}))
+	assert.Empty(t, active.IssueDueDate, "a cleared due date is cleared here too")
+}

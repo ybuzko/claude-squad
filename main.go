@@ -174,6 +174,9 @@ var (
 					if rule.IsDone(is) {
 						doneMark = " (done)"
 					}
+					if is.DueDate != "" {
+						doneMark += " (due " + is.DueDate + ")"
+					}
 					fmt.Printf("  %-10s %-14s %s%s\n", is.Identifier, is.StateName, is.Title, doneMark)
 				}
 			}

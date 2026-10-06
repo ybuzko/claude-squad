@@ -139,6 +139,10 @@ func (m *home) handlePollDone(msg linearPollDoneMsg) tea.Cmd {
 
 	var cmds []tea.Cmd
 	persist := m.applyTicketStates(msg.live)
+	if refreshTicketDetails(append(append([]linear.Issue{}, msg.view...), msg.live...),
+		m.list.GetInstances(), m.archive.GetInstances()) {
+		persist = true
+	}
 
 	plan := planView(msg.view, m.list.GetInstances(), m.archive.GetInstances())
 	persist = persist || plan.changed
@@ -275,6 +279,8 @@ func (m *home) spawnTicket(issue linear.Issue, inView bool) (tea.Cmd, error) {
 		IssueID:       issue.Identifier,
 		IssueUUID:     issue.ID,
 		IssueURL:      issue.URL,
+		IssueTitle:    issue.Title,
+		IssueDueDate:  issue.DueDate,
 		SetupCommand:  m.setupCommand(),
 	})
 	if err != nil {
@@ -448,4 +454,27 @@ func planView(view []linear.Issue, active, archived []*session.Instance) viewPla
 		}
 	}
 	return plan
+}
+
+// refreshTicketDetails copies each ticket's current title and due date from Linear
+// onto its instances, active or archived. Returns true if anything changed.
+func refreshTicketDetails(issues []linear.Issue, lists ...[]*session.Instance) bool {
+	byID := make(map[string]linear.Issue, len(issues))
+	for _, is := range issues {
+		byID[is.Identifier] = is
+	}
+	changed := false
+	for _, list := range lists {
+		for _, inst := range list {
+			is, ok := byID[inst.IssueID]
+			if !inst.IsTicket() || !ok {
+				continue
+			}
+			if inst.IssueTitle != is.Title || inst.IssueDueDate != is.DueDate {
+				inst.IssueTitle, inst.IssueDueDate = is.Title, is.DueDate
+				changed = true
+			}
+		}
+	}
+	return changed
 }
