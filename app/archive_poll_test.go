@@ -2,6 +2,7 @@ package app
 
 import (
 	"claude-squad/config"
+	"claude-squad/linear"
 	"claude-squad/session"
 	"claude-squad/ui"
 	"context"
@@ -107,4 +108,22 @@ func TestFailedArchiveGoesBackToActiveList(t *testing.T) {
 	assert.Same(t, inst, h.list.FindByTitle("TSA-1"))
 	assert.False(t, inst.Archived)
 	assert.True(t, inst.InView, "restored so the next poll retries the archive")
+}
+
+func TestInstanceLimitGatesDispatcherButNotManualSpawns(t *testing.T) {
+	h := newPollHome(t)
+	h.appConfig.InstanceLimit = 1
+	h.dispatcher.cfg.Spawn.RepoPath = t.TempDir()
+	h.list.AddInstance(ticket("TSA-1", session.Ready, true))
+
+	// The poller waits: the active count is already at the limit.
+	h.handlePollDone(linearPollDoneMsg{view: issues("TSA-1", "TSA-2")})
+	assert.Nil(t, h.list.FindByTitle("TSA-2"))
+	require.Len(t, h.dispatcher.pending, 1)
+
+	// `t` (and n/N) go past it.
+	_, err := h.spawnTicket(linear.Issue{Identifier: "TSA-3", Title: "Manual"}, false)
+	require.NoError(t, err)
+	assert.NotNil(t, h.list.FindByTitle("TSA-3"))
+	assert.Equal(t, 2, h.list.NumInstances())
 }

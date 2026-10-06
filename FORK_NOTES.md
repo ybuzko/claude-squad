@@ -144,7 +144,9 @@ File: `~/.claude-squad/status/<ISSUE-ID>.json`
 - The view is the only filter: every issue it returns gets a session. Exclude
   finished, assigned-elsewhere, or otherwise unwanted tickets in the view itself.
 - `max_concurrent` caps instances that are actually working (`Running`/`Loading`);
-  `blocked`, `idle`, `Paused`, `Done` do not count. `instance_limit` caps the total.
+  `blocked`, `idle`, `Paused`, `Done` do not count. `instance_limit` caps active
+  (non-archived) instances for the dispatcher only: it spawns and restores until the count
+  reaches it. Manual `n`, `N`, `t` and archive `r` always work and may go past it.
 - Done detection: an instance is `Done` when its issue's workflow state has a type in
   `done_state_types`, or an id in `done_state_ids`. A reopened ticket flips back. This is
   only a label (✓); archiving is driven by view membership.

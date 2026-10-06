@@ -260,9 +260,6 @@ func (m *home) spawnTicket(issue linear.Issue, inView bool) (tea.Cmd, error) {
 	if m.list.FindByTitle(issue.Identifier) != nil || m.archive.FindByTitle(issue.Identifier) != nil {
 		return nil, fmt.Errorf("an instance for %s already exists", issue.Identifier)
 	}
-	if m.list.NumInstances() >= m.instanceLimit() {
-		return nil, fmt.Errorf("you can't create more than %d instances", m.instanceLimit())
-	}
 
 	// A status file left behind by an earlier session for this ticket would be
 	// mistaken for the new session's state until its first hook fires.
@@ -360,6 +357,8 @@ func (m *home) lookupTicketCmd(identifier string) tea.Cmd {
 	}
 }
 
+// instanceLimit caps the active instances the dispatcher fills up to on its own
+// (spawns and restores). Manual n, N, t and archive restores may go past it.
 func (m *home) instanceLimit() int {
 	return m.appConfig.InstanceLimit
 }

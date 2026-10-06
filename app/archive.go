@@ -270,9 +270,6 @@ func (m *home) handleArchiveKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if selected == nil {
 			return m, nil
 		}
-		if m.list.NumInstances() >= m.instanceLimit() {
-			return m, m.handleError(fmt.Errorf("you can't have more than %d active instances", m.instanceLimit()))
-		}
 		restore := m.restoreTicket(selected, "")
 		// Show the restored session where it now lives.
 		m.list.SelectInstance(selected)

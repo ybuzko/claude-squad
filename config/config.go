@@ -81,7 +81,8 @@ type Config struct {
 	BranchPrefix string `json:"branch_prefix"`
 	// Profiles is a list of named program profiles.
 	Profiles []Profile `json:"profiles,omitempty"`
-	// InstanceLimit caps the total number of instances.
+	// InstanceLimit caps the active instances the Linear dispatcher fills up to on its
+	// own. Instances you create by hand (n, N, t, restoring from the archive) may exceed it.
 	InstanceLimit int          `json:"instance_limit"`
 	Linear        LinearConfig `json:"linear"`
 	Spawn         SpawnConfig  `json:"spawn"`

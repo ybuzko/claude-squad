@@ -755,19 +755,11 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		if m.dispatcher == nil {
 			return m, nil
 		}
-		if m.list.NumInstances() >= m.instanceLimit() {
-			return m, m.handleError(
-				fmt.Errorf("you can't create more than %d instances", m.instanceLimit()))
-		}
 		m.state = stateTicket
 		m.menu.SetState(ui.StatePrompt)
 		m.textInputOverlay = overlay.NewTextInputOverlay("Linear issue id (e.g. TSA-123)", "")
 		return m, tea.WindowSize()
 	case keys.KeyPrompt:
-		if m.list.NumInstances() >= m.instanceLimit() {
-			return m, m.handleError(
-				fmt.Errorf("you can't create more than %d instances", m.instanceLimit()))
-		}
 
 		// Start a background fetch so branches are up to date by the time the picker opens
 		fetchCmd := func() tea.Msg {
@@ -794,10 +786,6 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 
 		return m, fetchCmd
 	case keys.KeyNew:
-		if m.list.NumInstances() >= m.instanceLimit() {
-			return m, m.handleError(
-				fmt.Errorf("you can't create more than %d instances", m.instanceLimit()))
-		}
 		instance, err := session.NewInstance(session.InstanceOptions{
 			Title:        "",
 			Path:         m.workPath(),
