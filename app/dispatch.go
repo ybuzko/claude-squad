@@ -143,9 +143,15 @@ func (m *home) handlePollDone(msg linearPollDoneMsg) tea.Cmd {
 		}
 	}
 
-	d.pending = linear.NewIssues(msg.view, func(id string) bool {
+	// Views often keep finished tickets visible; those need no session.
+	d.pending = d.pending[:0]
+	for _, issue := range linear.NewIssues(msg.view, func(id string) bool {
 		return m.list.FindByTitle(id) != nil
-	})
+	}) {
+		if !d.rule.IsDone(issue) {
+			d.pending = append(d.pending, issue)
+		}
+	}
 	cmds = append(cmds, m.drainPending()...)
 	cmds = append(cmds, m.schedulePollCmd())
 	return tea.Batch(cmds...)
