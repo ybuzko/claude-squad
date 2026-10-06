@@ -7,8 +7,11 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestDueLabel(t *testing.T) {
@@ -57,4 +60,39 @@ func TestPlainSessionRowKeepsBranch(t *testing.T) {
 	inst := &session.Instance{Title: "scratch", Status: session.Ready, Branch: "yaroslav/scratch"}
 	lines := renderRow(inst, 80)
 	assert.Contains(t, lines[1], branchIcon+"-yaroslav/scratch")
+}
+
+func TestTicketRowShowsLinearState(t *testing.T) {
+	inst := &session.Instance{
+		Title: "TSA-168", IssueID: "TSA-168", Status: session.Ready,
+		IssueTitle: "Thor Xpress Transport", IssueState: "Blocked by Client",
+	}
+	lines := renderRow(inst, 80)
+	assert.Contains(t, lines[0], "TSA-168 · Blocked by Client")
+
+	plain := &session.Instance{Title: "scratch", Status: session.Ready, IssueState: "ignored"}
+	assert.NotContains(t, renderRow(plain, 80)[0], "ignored", "only ticket rows show a state")
+}
+
+func TestSelectedTicketRowKeepsHighlightAcrossStyledState(t *testing.T) {
+	// Tests have no terminal, so lipgloss would emit no colors at all.
+	prev := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(prev)
+
+	sp := spinner.New()
+	r := &InstanceRenderer{spinner: &sp}
+	r.setWidth(80)
+	inst := &session.Instance{Title: "TSA-168", IssueID: "TSA-168", Status: session.Ready, IssueState: "Blocked by Client"}
+	row := strings.Split(r.Render(inst, 1, true, false), "\n")[0]
+	require.Contains(t, row, "\x1b[", "colors are on")
+	// After the styled state, the rest of the row must still be drawn on the selection
+	// background, i.e. a background color is set again after every reset.
+	parts := strings.Split(row, "\x1b[0m")
+	for i, p := range parts[1:] {
+		if ansi.Strip(p) == "" {
+			continue // nothing drawn between two resets
+		}
+		assert.Contains(t, p, "48;", "segment %d after a reset is drawn without the selection background: %q", i+1, p)
+	}
 }

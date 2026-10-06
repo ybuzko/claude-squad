@@ -32,6 +32,7 @@ type InstanceData struct {
 
 	IssueTitle   string `json:"issue_title,omitempty"`
 	IssueDueDate string `json:"issue_due_date,omitempty"`
+	IssueState   string `json:"issue_state,omitempty"`
 
 	Archived   bool      `json:"archived,omitempty"`
 	ArchivedAt time.Time `json:"archived_at,omitempty"`

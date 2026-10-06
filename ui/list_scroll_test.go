@@ -120,3 +120,16 @@ func TestListTitle(t *testing.T) {
 	assert.Contains(t, out, "Archive")
 	assert.NotContains(t, out, "Instances")
 }
+
+func TestFirstAndLast(t *testing.T) {
+	l := newScrollList(5, 40, 20)
+	l.SetSelectedInstance(2)
+	l.Last()
+	assert.Equal(t, "TSA-104", l.GetSelectedInstance().Title)
+	l.First()
+	assert.Equal(t, "TSA-100", l.GetSelectedInstance().Title)
+	empty := newScrollList(0, 40, 20)
+	empty.Last()
+	empty.First()
+	assert.Nil(t, empty.GetSelectedInstance())
+}

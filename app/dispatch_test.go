@@ -70,3 +70,9 @@ func TestRefreshTicketDetails(t *testing.T) {
 	assert.True(t, refreshTicketDetails(view, []*session.Instance{active}))
 	assert.Empty(t, active.IssueDueDate, "a cleared due date is cleared here too")
 }
+
+func TestApplyHookStatusUsesHookTimestampAsStatusTime(t *testing.T) {
+	inst := &session.Instance{Title: "TSA-1", IssueID: "TSA-1", Status: session.Running}
+	applyHookStatus(inst, &status.Status{State: status.StateIdle, TS: 1_791_000_000})
+	assert.Equal(t, int64(1_791_000_000), inst.StatusChangedAt.Unix())
+}

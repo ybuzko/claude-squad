@@ -262,6 +262,12 @@ func (m *home) handleArchiveKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case keys.KeyDown:
 		m.archive.Down()
 		return m, m.instanceChanged()
+	case keys.KeyHome:
+		m.archive.First()
+		return m, m.instanceChanged()
+	case keys.KeyEnd:
+		m.archive.Last()
+		return m, m.instanceChanged()
 	case keys.KeyHelp:
 		return m.showHelpScreen(helpTypeGeneral{}, nil)
 	case keys.KeyQuit:

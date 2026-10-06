@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 var previewPaneStyle = lipgloss.NewStyle().
@@ -18,7 +19,9 @@ type PreviewPane struct {
 
 	previewState previewState
 	isScrolling  bool
-	viewport     viewport.Model
+	// scrollInstance is the session whose history isScrolling is showing.
+	scrollInstance *session.Instance
+	viewport       viewport.Model
 }
 
 type previewState struct {
@@ -51,6 +54,15 @@ func (p *PreviewPane) setFallbackState(message string) {
 
 // Updates the preview pane content with the tmux pane content
 func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
+	// History scroll mode belongs to the session it was entered on; selecting another
+	// session leaves it instead of showing the old session's history.
+	if p.isScrolling && instance != p.scrollInstance {
+		p.isScrolling = false
+		p.scrollInstance = nil
+		p.viewport.SetContent("")
+		p.viewport.GotoTop()
+	}
+
 	switch {
 	case instance == nil:
 		p.setFallbackState("No agents running yet. Spin up a new instance with 'n' to get started!")
@@ -176,6 +188,13 @@ func (p *PreviewPane) String() string {
 
 	lines := strings.Split(p.previewState.text, "\n")
 
+	// Cut lines to the pane width. Right after a resize the tmux pane still holds output
+	// laid out for the old size, and capture-pane -J joins wrapped lines; wrapping them
+	// here would make the frame taller than the terminal and shift the whole UI.
+	for i, l := range lines {
+		lines[i] = ansi.Truncate(l, p.width, "")
+	}
+
 	// Truncate if we have more lines than available height
 	if availableHeight > 0 {
 		if len(lines) > availableHeight {
@@ -199,6 +218,14 @@ func (p *PreviewPane) ScrollUp(instance *session.Instance) error {
 		return nil
 	}
 
+	// Full-screen programs (Claude Code) keep no tmux history: scroll the program
+	// itself and keep showing the live pane, which now shows the scrolled view.
+	if !p.isScrolling {
+		if handled, err := instance.ForwardScroll(true); handled || err != nil {
+			return err
+		}
+	}
+
 	if !p.isScrolling {
 		// Entering scroll mode - capture entire pane content including scrollback history
 		content, err := instance.PreviewFullHistory()
@@ -218,6 +245,7 @@ func (p *PreviewPane) ScrollUp(instance *session.Instance) error {
 		p.viewport.GotoBottom()
 
 		p.isScrolling = true
+		p.scrollInstance = instance
 		return nil
 	}
 
@@ -232,6 +260,14 @@ func (p *PreviewPane) ScrollDown(instance *session.Instance) error {
 		return nil
 	}
 
+	// Full-screen programs (Claude Code) keep no tmux history: scroll the program
+	// itself and keep showing the live pane, which now shows the scrolled view.
+	if !p.isScrolling {
+		if handled, err := instance.ForwardScroll(false); handled || err != nil {
+			return err
+		}
+	}
+
 	if !p.isScrolling {
 		// Entering scroll mode - capture entire pane content including scrollback history
 		content, err := instance.PreviewFullHistory()
@@ -251,6 +287,7 @@ func (p *PreviewPane) ScrollDown(instance *session.Instance) error {
 		p.viewport.GotoBottom()
 
 		p.isScrolling = true
+		p.scrollInstance = instance
 		return nil
 	}
 
@@ -267,6 +304,7 @@ func (p *PreviewPane) ResetToNormalMode(instance *session.Instance) error {
 
 	if p.isScrolling {
 		p.isScrolling = false
+		p.scrollInstance = nil
 		// Reset viewport
 		p.viewport.SetContent("")
 		p.viewport.GotoTop()

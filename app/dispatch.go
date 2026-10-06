@@ -278,6 +278,7 @@ func (m *home) spawnTicket(issue linear.Issue, inView bool) (tea.Cmd, error) {
 		IssueURL:      issue.URL,
 		IssueTitle:    issue.Title,
 		IssueDueDate:  issue.DueDate,
+		IssueState:    issue.StateName,
 		SetupCommand:  m.setupCommand(),
 	})
 	if err != nil {
@@ -337,6 +338,10 @@ func applyHookStatus(inst *session.Instance, hs *status.Status) (persist bool) {
 		inst.SetStatus(session.Ready)
 	case status.StateRunning:
 		inst.SetStatus(session.Running)
+	}
+	// The hook's timestamp is when the state really changed, also after a restart.
+	if hs.TS != 0 {
+		inst.StatusChangedAt = time.Unix(hs.TS, 0)
 	}
 	inst.HookReason = hs.Reason
 	if hs.SessionID != "" && hs.SessionID != inst.ClaudeSessionID {
@@ -455,7 +460,7 @@ func planView(view []linear.Issue, active, archived []*session.Instance) viewPla
 	return plan
 }
 
-// refreshTicketDetails copies each ticket's current title and due date from Linear
+// refreshTicketDetails copies each ticket's current title, due date and state from Linear
 // onto its instances, active or archived. Returns true if anything changed.
 func refreshTicketDetails(issues []linear.Issue, lists ...[]*session.Instance) bool {
 	byID := make(map[string]linear.Issue, len(issues))
@@ -469,8 +474,8 @@ func refreshTicketDetails(issues []linear.Issue, lists ...[]*session.Instance) b
 			if !inst.IsTicket() || !ok {
 				continue
 			}
-			if inst.IssueTitle != is.Title || inst.IssueDueDate != is.DueDate {
-				inst.IssueTitle, inst.IssueDueDate = is.Title, is.DueDate
+			if inst.IssueTitle != is.Title || inst.IssueDueDate != is.DueDate || inst.IssueState != is.StateName {
+				inst.IssueTitle, inst.IssueDueDate, inst.IssueState = is.Title, is.DueDate, is.StateName
 				changed = true
 			}
 		}

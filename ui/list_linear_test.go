@@ -3,6 +3,7 @@ package ui
 import (
 	"claude-squad/session"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/stretchr/testify/assert"
@@ -51,4 +52,20 @@ func TestFindByTitle(t *testing.T) {
 	l, items := newListWith(session.Ready, session.Ready)
 	assert.Same(t, items[1], l.FindByTitle("B"))
 	assert.Nil(t, l.FindByTitle("Z"))
+}
+
+func TestSortPutsMostRecentlyIdleFirst(t *testing.T) {
+	l, items := newListWith(session.Ready, session.Running, session.Ready, session.Blocked, session.Ready)
+	now := time.Now()
+	items[0].StatusChangedAt = now.Add(-3 * time.Hour)
+	items[2].StatusChangedAt = now.Add(-1 * time.Minute) // newest idle
+	items[4].StatusChangedAt = now.Add(-1 * time.Hour)
+
+	l.SortByUrgency()
+	got := []*session.Instance{}
+	for _, it := range l.items {
+		got = append(got, it)
+	}
+	assert.Equal(t, []*session.Instance{items[3], items[2], items[4], items[0], items[1]}, got,
+		"blocked, then idle newest-first, then working")
 }

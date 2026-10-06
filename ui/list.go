@@ -15,7 +15,10 @@ import (
 )
 
 const readyIcon = "● "
-const pausedIcon = "⏸ "
+
+// pausedIcon avoids ⏸ (U+23F8): it has an emoji form, and Windows Terminal draws it two
+// columns wide while Go measures one, which wraps the row and garbles the list.
+const pausedIcon = "‖ "
 const blockedIcon = "! "
 const doneIcon = "✓ "
 
@@ -80,10 +83,13 @@ type List struct {
 	selectedIdx int
 	// offset is the index of the first item shown when the list is taller than its
 	// viewport. String keeps the selected item inside the visible window.
-	offset        int
-	height, width int
-	renderer      *InstanceRenderer
-	autoyes       bool
+	offset int
+	// shownStart and shownEnd are the items the last String drew ([start, end)), and
+	// shownTop the row the first of them starts on; ItemAtRow maps clicks with them.
+	shownStart, shownEnd, shownTop int
+	height, width                  int
+	renderer                       *InstanceRenderer
+	autoyes                        bool
 	// linearMode enables the blocked/idle header counts and the urgency sort.
 	linearMode bool
 	// title is the header text; the archive list uses its own.
@@ -127,7 +133,16 @@ func (l *List) SortByUrgency() bool {
 	before := make([]*session.Instance, len(l.items))
 	copy(before, l.items)
 	sort.SliceStable(l.items, func(a, b int) bool {
-		return statusRank(l.items[a].Status) < statusRank(l.items[b].Status)
+		ia, ib := l.items[a], l.items[b]
+		ra, rb := statusRank(ia.Status), statusRank(ib.Status)
+		if ra != rb {
+			return ra < rb
+		}
+		// Idle sessions: the one that most recently stopped working comes first.
+		if ia.Status == session.Ready {
+			return ia.StatusChangedAt.After(ib.StatusChangedAt)
+		}
+		return false
 	})
 	changed := false
 	for i := range before {
@@ -212,19 +227,19 @@ func (r *InstanceRenderer) setWidth(width int) {
 }
 
 // statusGlyph is the icon shown after an instance's title for its status.
-func (r *InstanceRenderer) statusGlyph(i *session.Instance) string {
+func (r *InstanceRenderer) statusGlyph(i *session.Instance, bg lipgloss.TerminalColor) string {
 	var join string
 	switch i.Status {
 	case session.Running, session.Loading:
 		join = fmt.Sprintf("%s ", r.spinner.View())
 	case session.Ready:
-		join = readyStyle.Render(readyIcon)
+		join = readyStyle.Background(bg).Render(readyIcon)
 	case session.Paused:
-		join = pausedStyle.Render(pausedIcon)
+		join = pausedStyle.Background(bg).Render(pausedIcon)
 	case session.Blocked:
-		join = blockedStyle.Render(blockedIcon)
+		join = blockedStyle.Background(bg).Render(blockedIcon)
 	case session.Done:
-		join = doneStyle.Render(doneIcon)
+		join = doneStyle.Background(bg).Render(doneIcon)
 	default:
 	}
 	return join
@@ -246,24 +261,40 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 	}
 
 	// add spinner next to title if it's running (or being restored from the archive)
-	join := r.statusGlyph(i)
+	join := r.statusGlyph(i, titleS.GetBackground())
 	if i.Restoring {
 		join = fmt.Sprintf("%s ", r.spinner.View())
 	}
 
-	// Cut the title if it's too long
-	titleText := i.Title
+	// First row: id, then the ticket's Linear state, then its due date; cut to fit.
+	stateText := ""
+	if i.IsTicket() && i.IssueState != "" {
+		stateText = " · " + i.IssueState
+	}
+	plain := i.Title + stateText
 	if due := dueLabel(i.IssueDueDate, time.Now()); due != "" {
-		titleText += " (" + due + ")"
+		plain += " (" + due + ")"
 	}
 	widthAvail := r.width - 3 - runewidth.StringWidth(prefix) - 1
-	if widthAvail > 0 && runewidth.StringWidth(titleText) > widthAvail {
-		titleText = runewidth.Truncate(titleText, widthAvail-3, "...")
+	if widthAvail > 0 && runewidth.StringWidth(plain) > widthAvail {
+		plain = runewidth.Truncate(plain, widthAvail-3, "...")
+	}
+	// Color the state. Every piece carries the row's background explicitly: a styled
+	// piece ends with a reset, which would otherwise drop the selection highlight for
+	// the rest of the row.
+	bg := titleS.GetBackground()
+	base := lipgloss.NewStyle().Background(bg).Foreground(titleS.GetForeground())
+	titleText := base.Render(prefix + " " + plain)
+	if stateText != "" && len(plain) > len(i.Title) {
+		end := min(len(i.Title)+len(stateText), len(plain))
+		titleText = base.Render(prefix+" "+plain[:len(i.Title)]) +
+			issueStateStyle(i.IssueState).Background(bg).Render(plain[len(i.Title):end]) +
+			base.Render(plain[end:])
 	}
 	title := titleS.Render(lipgloss.JoinHorizontal(
 		lipgloss.Left,
-		lipgloss.Place(r.width-3, 1, lipgloss.Left, lipgloss.Center, fmt.Sprintf("%s %s", prefix, titleText)),
-		" ",
+		lipgloss.Place(r.width-3, 1, lipgloss.Left, lipgloss.Center, titleText, lipgloss.WithWhitespaceBackground(bg)),
+		base.Render(" "),
 		join,
 	))
 
@@ -347,6 +378,15 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 	)
 
 	return text
+}
+
+// issueStateStyle colors a ticket's Linear state: blocked states (any state whose name
+// contains "blocked") stand out, others stay quiet.
+func issueStateStyle(state string) lipgloss.Style {
+	if strings.Contains(strings.ToLower(state), "blocked") {
+		return lipgloss.NewStyle().Foreground(blockedStyle.GetForeground())
+	}
+	return lipgloss.NewStyle().Foreground(listDescStyle.GetForeground())
 }
 
 // dueLabel renders a Linear due date (YYYY-MM-DD) as "due 10/5", adding the year when
@@ -453,7 +493,9 @@ func (l *List) String() string {
 
 	// Render the visible window of the list.
 	start, end := l.visibleRange(l.height - listHeaderLines)
+	l.shownStart, l.shownEnd, l.shownTop = start, end, listHeaderLines
 	if start > 0 {
+		l.shownTop++
 		b.WriteString(scrollHintStyle.Render(fmt.Sprintf("   ↑ %d more", start)))
 		b.WriteString("\n")
 	}
@@ -484,6 +526,19 @@ const (
 	// itemLines is the height of one rendered item: title line and branch line.
 	itemLines = 2
 )
+
+// ItemAtRow returns the index of the item drawn on the given row of the last String
+// output (0 = the list's first row), or false if that row holds no item.
+func (l *List) ItemAtRow(row int) (int, bool) {
+	if row < l.shownTop {
+		return 0, false
+	}
+	idx := l.shownStart + (row-l.shownTop)/itemLines
+	if idx >= l.shownEnd || idx >= len(l.items) {
+		return 0, false
+	}
+	return idx, true
+}
 
 // visibleRange returns the [start, end) slice of items that fits in avail lines,
 // scrolled so the selected item is shown. When not everything fits, one line at
@@ -557,6 +612,18 @@ func (l *List) Kill() {
 func (l *List) Attach() (chan struct{}, error) {
 	targetInstance := l.items[l.selectedIdx]
 	return targetInstance.Attach()
+}
+
+// First selects the first item in the list.
+func (l *List) First() {
+	l.selectedIdx = 0
+}
+
+// Last selects the last item in the list.
+func (l *List) Last() {
+	if len(l.items) > 0 {
+		l.selectedIdx = len(l.items) - 1
+	}
 }
 
 // Up selects the prev item in the list.

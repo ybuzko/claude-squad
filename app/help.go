@@ -46,6 +46,7 @@ func (h helpTypeGeneral) toContent() string {
 		keyStyle.Render("D")+descStyle.Render("         - Kill (delete) the selected session; archives ticket sessions"),
 		keyStyle.Render("a")+descStyle.Render("         - Show the archive (Linear mode): r restores, D deletes for good"),
 		keyStyle.Render("↑/j, ↓/k")+descStyle.Render("  - Navigate between sessions"),
+		keyStyle.Render("home/end")+descStyle.Render("  - Jump to the first/last session"),
 		keyStyle.Render("J/K")+descStyle.Render("       - Reorder sessions"),
 		keyStyle.Render("↵/o")+descStyle.Render("       - Attach to the selected session"),
 		keyStyle.Render("ctrl-q")+descStyle.Render("    - Detach from session"),
@@ -58,6 +59,7 @@ func (h helpTypeGeneral) toContent() string {
 		headerStyle.Render("Other:"),
 		keyStyle.Render("tab")+descStyle.Render("       - Switch between preview, diff, and terminal tabs"),
 		keyStyle.Render("shift-↓/↑")+descStyle.Render(" - Scroll in preview/diff/terminal view"),
+		keyStyle.Render("ctrl-l")+descStyle.Render("    - Redraw the screen"),
 		keyStyle.Render("q")+descStyle.Render("         - Quit the application"),
 	)
 	return content

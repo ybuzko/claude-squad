@@ -70,6 +70,8 @@ type Instance struct {
 	// every poll refreshes them.
 	IssueTitle   string
 	IssueDueDate string
+	// IssueState is the ticket's Linear workflow state name (e.g. "Blocked by Client").
+	IssueState string
 	// ClaudeSessionID is the Claude Code session id reported by the SessionStart hook,
 	// used to resume the conversation after the tmux session dies.
 	ClaudeSessionID string
@@ -90,6 +92,10 @@ type Instance struct {
 	Restoring bool
 	// diffSched throttles diff-stat refreshes; see diff_schedule.go.
 	diffSched diffSchedule
+	// StatusChangedAt is when Status last changed (for ticket sessions, the time of the
+	// hook event that changed it). The list puts the most recently idle sessions first.
+	// Not persisted: hook status files restore it for ticket sessions.
+	StatusChangedAt time.Time
 
 	// DiffStats stores the current git diff statistics
 	diffStats *git.DiffStats
@@ -131,6 +137,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		SetupCommand:    i.SetupCommand,
 		IssueTitle:      i.IssueTitle,
 		IssueDueDate:    i.IssueDueDate,
+		IssueState:      i.IssueState,
 		Archived:        i.Archived,
 		ArchivedAt:      i.ArchivedAt,
 		InView:          i.InView,
@@ -180,6 +187,7 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		SetupCommand:    data.SetupCommand,
 		IssueTitle:      data.IssueTitle,
 		IssueDueDate:    data.IssueDueDate,
+		IssueState:      data.IssueState,
 		Archived:        data.Archived,
 		ArchivedAt:      data.ArchivedAt,
 		InView:          data.InView,
@@ -234,6 +242,7 @@ type InstanceOptions struct {
 	IssueURL     string
 	IssueTitle   string
 	IssueDueDate string
+	IssueState   string
 	// SetupCommand runs in the worktree before the program starts (empty = none).
 	SetupCommand string
 }
@@ -262,6 +271,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		IssueURL:       opts.IssueURL,
 		IssueTitle:     opts.IssueTitle,
 		IssueDueDate:   opts.IssueDueDate,
+		IssueState:     opts.IssueState,
 		SetupCommand:   opts.SetupCommand,
 		selectedBranch: opts.Branch,
 		newBranchName:  opts.NewBranchName,
@@ -310,6 +320,9 @@ func (i *Instance) RepoName() (string, error) {
 }
 
 func (i *Instance) SetStatus(status Status) {
+	if status != i.Status {
+		i.StatusChangedAt = time.Now()
+	}
 	i.Status = status
 }
 
@@ -900,6 +913,16 @@ func (i *Instance) SendPrompt(prompt string) error {
 	}
 
 	return nil
+}
+
+// ForwardScroll scrolls the program running in the session (see
+// TmuxSession.ForwardScroll). Returns false if the caller should scroll tmux's
+// history instead.
+func (i *Instance) ForwardScroll(up bool) (bool, error) {
+	if !i.started || i.Status == Paused || i.tmuxSession == nil {
+		return false, nil
+	}
+	return i.tmuxSession.ForwardScroll(up)
 }
 
 // PreviewFullHistory captures the entire tmux pane output including full scrollback history

@@ -22,9 +22,32 @@ Where the fork hooks in. Keep this table current when rebasing.
 | Worktree + branch | `session/git/worktree.go`: branch = `BranchPrefix + title` (lowercased by `sanitizeBranchName`), path `~/.claude-squad/worktrees/<branch>_<hex>`, base = `HEAD` of repo | `NewGitWorktreeForBranch(...)` takes an explicit branch + base ref (`origin/main`, fetched first) |
 | Pause / Resume / Kill | `Instance.Pause()` keeps branch + path; `Resume()` restarts tmux with the same `Program`; `Kill()` drops worktree **and** branch | ticket instances: `D` archives (`StopForArchive` = `Pause` + kill tmux); permanent delete (`Kill`) only from the archive view; `Resume()` uses `claude --resume <session>` / `claude -c` |
 | Config | `config/config.go`, `~/.claude-squad/config.json`, `cs debug` | `linear`, `spawn`, `instance_limit` sections |
-| List rendering | `ui/list.go` `List.items` (user-ordered via J/K), `InstanceRenderer.Render` glyph by status, header `" Instances "` | urgency sort (blocked → idle → running → paused → done), header counts; compact two-line rows (ticket rows: `TSA-123 (due 10/5)` over the ticket title, refreshed every poll; other rows keep the branch), scrolled window that follows the selection with `↑/↓ N more` hints (upstream overflowed the viewport) |
+| List rendering | `ui/list.go` `List.items` (user-ordered via J/K), `InstanceRenderer.Render` glyph by status, header `" Instances "` | urgency sort (blocked → idle → running → paused → done; idle sessions most recently idle first, by `StatusChangedAt`, taken from the hook timestamp for ticket sessions), header counts; `home`/`end` jump to first/last; compact two-line rows (ticket rows: `TSA-123 · <Linear state> (due 10/5)` over the ticket title, refreshed every poll, states containing "blocked" in red; other rows keep the branch); a left click selects a session (`List.ItemAtRow`), scrolled window that follows the selection with `↑/↓ N more` hints (upstream overflowed the viewport) |
 | Trust prompt | `Instance.CheckAndHandleTrustPrompt()` exists upstream but is never called | called on a backoff (1–21 s) after auto-spawn; moves the selection to "Yes, I trust this folder" before confirming, since current Claude Code defaults to "No, exit" |
 | Entry point | `main.go` cobra root; requires cwd to be a git repo | `--linear` flag; `cs hook` subcommand; cwd check relaxed when `spawn.repo_path` is set |
+
+Rendering fixes over upstream: the frame is sized to exactly the terminal height
+(upstream was always one line over, and bubbletea drops lines from the *top* of a frame
+that is too tall), `home.View` clips the frame to the terminal as a last guard, the
+preview and terminal panes cut captured lines to the pane width instead of letting
+lipgloss wrap them (after a resize the pane still holds old-width output, and
+`capture-pane -J` joins wrapped lines), and tmux sessions are resized only once the
+terminal size has held still for 200 ms, at which point the screen is also cleared
+and fully repainted (Windows Terminal/ConPTY reflows its own copy of the screen on
+resize, and bubbletea only rewrites lines it believes changed). `ctrl+l` repaints by hand.
+
+Preview scrolling: Claude Code draws on the alternate screen, so its tmux panes have
+no history and upstream's scroll mode (capture `-S -` into a viewport) could move one
+line. `TmuxSession.ForwardScroll` sends wheel events (SGR, when the program tracks the
+mouse) or PageUp/PageDown (alternate screen without mouse) into the pane instead, and
+the live preview shows the program's own scrolled view. Ordinary panes keep the history
+viewport, which now closes when another session is selected.
+
+Keys: attaching (`o`) runs a tmux client that switches the terminal to application
+cursor mode, and cs's detach closes it without switching back, after which Windows
+Terminal sends Home/End as `ESC O H`/`ESC O F` (bubbletea v1.3 reads them as alt+O + H/F).
+cs writes `ESC [?1l ESC >` at startup and after every detach, and `translateSS3` maps the
+sequences anyway.
 
 Dead code upstream worth knowing: `instanceStartDoneMsg` / `runInstanceStartCmd`
 in `app/app.go` are unused; `instanceStartedMsg` is the live path.

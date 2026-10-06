@@ -6,6 +6,7 @@ import (
 	"claude-squad/log"
 	"claude-squad/session"
 	"claude-squad/session/git"
+	"claude-squad/session/tmux"
 	"claude-squad/status"
 	"claude-squad/ui"
 	"claude-squad/ui/overlay"
@@ -19,6 +20,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 )
 
@@ -29,6 +31,9 @@ func Run(ctx context.Context, program string, autoYes bool, forceLinear bool) er
 	if err != nil {
 		return err
 	}
+	// A terminal left in application cursor mode sends Home/End as ESC O H / ESC O F,
+	// which bubbletea does not decode; start from normal mode.
+	os.Stdout.WriteString(tmux.ResetCursorKeys)
 	p := tea.NewProgram(
 		h,
 		tea.WithAltScreen(),
@@ -75,6 +80,14 @@ type home struct {
 	showArchive bool
 	// confirmedCmd is the Cmd produced by a confirmThen action, run once the dialog closes.
 	confirmedCmd tea.Cmd
+	// termWidth and termHeight are the terminal size from the last WindowSizeMsg.
+	termWidth, termHeight int
+	// resizeSeq numbers size events so only the last of a burst resizes tmux.
+	resizeSeq int
+	// ss3Pending is set after an alt+O key, the first half of an SS3 sequence.
+	ss3Pending bool
+	// listWidth is the width of the session list column, for mapping mouse clicks.
+	listWidth int
 
 	// -- State --
 
@@ -184,14 +197,31 @@ func newHome(ctx context.Context, program string, autoYes bool, forceLinear bool
 // updateHandleWindowSizeEvent sets the sizes of the components.
 // The components will try to render inside their bounds.
 func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
-	// List takes 30% of width, preview takes 70%
-	listWidth := int(float32(msg.Width) * 0.3)
-	tabsWidth := msg.Width - listWidth
+	m.termWidth, m.termHeight = msg.Width, msg.Height
 
-	// Menu takes 10% of height, list and window take 90%
+	// Lay out one column narrower than the terminal. A line exactly as wide as the
+	// terminal wraps if the terminal draws any character on it wider than Go measures it
+	// (Windows Terminal draws some emoji-capable symbols two columns wide), and one
+	// wrapped line shifts everything below it.
+	width := msg.Width - 1
+	if width < 1 {
+		width = msg.Width
+	}
+
+	// List takes 30% of width, preview takes 70%
+	listWidth := int(float32(width) * 0.3)
+	tabsWidth := width - listWidth
+	m.listWidth = listWidth
+
+	// Menu takes 10% of height, list and window take 90%. Two more rows go to the error
+	// box and the padding above the panes in View, so the frame is exactly msg.Height.
 	contentHeight := int(float32(msg.Height) * 0.9)
-	menuHeight := msg.Height - contentHeight - 1     // minus 1 for error box
-	m.errBox.SetSize(int(float32(msg.Width)*0.9), 1) // error box takes 1 row
+	menuHeight := msg.Height - contentHeight - 2
+	if menuHeight < 1 {
+		menuHeight = 1
+		contentHeight = msg.Height - menuHeight - 2
+	}
+	m.errBox.SetSize(int(float32(width)*0.9), 1) // error box takes 1 row
 
 	m.tabbedWindow.SetSize(tabsWidth, contentHeight)
 	m.list.SetSize(listWidth, contentHeight)
@@ -204,11 +234,44 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 		m.textOverlay.SetWidth(int(float32(msg.Width) * 0.6))
 	}
 
+	m.menu.SetSize(width, menuHeight)
+}
+
+// translateSS3 turns ESC O H / ESC O F, which terminals in application cursor mode send
+// for Home/End and which bubbletea reads as alt+O followed by H or F, back into
+// Home/End. Returns false for a key that should be dropped (the alt+O half).
+func (m *home) translateSS3(msg tea.KeyMsg) (tea.KeyMsg, bool) {
+	if m.ss3Pending {
+		m.ss3Pending = false
+		switch msg.String() {
+		case "H":
+			return tea.KeyMsg{Type: tea.KeyHome}, true
+		case "F":
+			return tea.KeyMsg{Type: tea.KeyEnd}, true
+		}
+		return msg, true
+	}
+	if msg.String() == "alt+O" {
+		m.ss3Pending = true
+		return msg, false
+	}
+	return msg, true
+}
+
+// resizeSettle is how long the terminal size must hold still before the tmux sessions
+// are resized. A drag-resize sends a burst of size events; resizing every session on
+// each one makes every Claude TUI redraw over and over.
+const resizeSettle = 200 * time.Millisecond
+
+// resizeSessionsMsg resizes the tmux sessions if no newer size event arrived since.
+type resizeSessionsMsg struct{ seq int }
+
+// resizeSessions gives every session's tmux window the preview pane's size.
+func (m *home) resizeSessions() {
 	previewWidth, previewHeight := m.tabbedWindow.GetPreviewSize()
 	if err := m.list.SetSessionPreviewSize(previewWidth, previewHeight); err != nil {
 		log.ErrorLog.Print(err)
 	}
-	m.menu.SetSize(msg.Width, menuHeight)
 }
 
 func (m *home) Init() tea.Cmd {
@@ -346,6 +409,16 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmd, m.instanceChanged())
 	case tea.MouseMsg:
+		// A left click on a session in the list selects it. The list is drawn one row
+		// below the top of the frame (see render).
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft &&
+			m.state == stateDefault && msg.X < m.listWidth {
+			if idx, ok := m.activeList().ItemAtRow(msg.Y - 1); ok {
+				m.activeList().SetSelectedInstance(idx)
+				return m, m.instanceChanged()
+			}
+			return m, nil
+		}
 		// Handle mouse wheel events for scrolling the diff/preview pane
 		if msg.Action == tea.MouseActionPress {
 			if msg.Button == tea.MouseButtonWheelDown || msg.Button == tea.MouseButtonWheelUp {
@@ -378,10 +451,25 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tea.KeyMsg:
-		return m.handleKeyPress(msg)
+		key, ok := m.translateSS3(msg)
+		if !ok {
+			return m, nil
+		}
+		return m.handleKeyPress(key)
 	case tea.WindowSizeMsg:
 		m.updateHandleWindowSizeEvent(msg)
-		return m, nil
+		m.resizeSeq++
+		seq := m.resizeSeq
+		return m, tea.Tick(resizeSettle, func(time.Time) tea.Msg { return resizeSessionsMsg{seq: seq} })
+	case resizeSessionsMsg:
+		if msg.seq != m.resizeSeq {
+			return m, nil
+		}
+		m.resizeSessions()
+		// Windows Terminal (through ConPTY) reflows its own copy of the screen on a
+		// resize, and bubbletea only rewrites lines it thinks changed, so stale fragments
+		// survive. Once the size has settled, clear and repaint everything.
+		return m, tea.ClearScreen
 	case error:
 		// Handle errors from confirmation actions
 		return m, m.handleError(msg)
@@ -708,6 +796,11 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, nil
 	}
 
+	// ctrl+l repaints the whole screen, as in most terminal programs.
+	if msg.String() == "ctrl+l" {
+		return m, tea.ClearScreen
+	}
+
 	if m.showArchive {
 		return m.handleArchiveKey(msg)
 	}
@@ -804,6 +897,12 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, nil
 	case keys.KeyUp:
 		m.list.Up()
+		return m, m.instanceChanged()
+	case keys.KeyHome:
+		m.list.First()
+		return m, m.instanceChanged()
+	case keys.KeyEnd:
+		m.list.Last()
 		return m, m.instanceChanged()
 	case keys.KeyDown:
 		m.list.Down()
@@ -1235,7 +1334,28 @@ func (m *home) confirmAction(message string, action tea.Cmd) tea.Cmd {
 	return nil
 }
 
+// View renders the frame and clips it to the terminal. bubbletea itself drops lines
+// from the top of a frame that is too tall, which hides the header and makes the whole
+// UI jump with every redraw; clipping here keeps the top in place.
 func (m *home) View() string {
+	return clipFrame(m.render(), m.termWidth, m.termHeight)
+}
+
+func clipFrame(frame string, width, height int) string {
+	if width <= 0 || height <= 0 {
+		return frame
+	}
+	lines := strings.Split(frame, "\n")
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	for i, l := range lines {
+		lines[i] = ansi.Truncate(l, width, "")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m *home) render() string {
 	listWithPadding := lipgloss.NewStyle().PaddingTop(1).Render(m.activeList().String())
 	previewWithPadding := lipgloss.NewStyle().PaddingTop(1).Render(m.tabbedWindow.String())
 	listAndPreview := lipgloss.JoinHorizontal(lipgloss.Top, listWithPadding, previewWithPadding)

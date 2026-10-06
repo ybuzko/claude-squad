@@ -37,6 +37,9 @@ const (
 	KeyTicket
 	// KeyArchiveView toggles the archive of ticket sessions (Linear mode only).
 	KeyArchiveView
+	// KeyHome and KeyEnd jump to the first and last session in the list.
+	KeyHome
+	KeyEnd
 
 	// Menu-only labels for keys whose meaning changes with context. They share a key
 	// with an entry above and are not in GlobalKeyStringsMap.
@@ -69,6 +72,8 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"?":          KeyHelp,
 	"t":          KeyTicket,
 	"a":          KeyArchiveView,
+	"home":       KeyHome,
+	"end":        KeyEnd,
 }
 
 // GlobalkeyBindings is a global, immutable map of KeyName tot keybinding.
@@ -141,6 +146,14 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeyTicket: key.NewBinding(
 		key.WithKeys("t"),
 		key.WithHelp("t", "new ticket"),
+	),
+	KeyHome: key.NewBinding(
+		key.WithKeys("home"),
+		key.WithHelp("home", "first"),
+	),
+	KeyEnd: key.NewBinding(
+		key.WithKeys("end"),
+		key.WithHelp("end", "last"),
 	),
 	KeyArchiveView: key.NewBinding(
 		key.WithKeys("a"),

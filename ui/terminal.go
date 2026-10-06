@@ -11,6 +11,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 var terminalPaneStyle = lipgloss.NewStyle().
@@ -283,8 +284,11 @@ func (t *TerminalPane) String() string {
 			Render(strings.Join(lines, ""))
 	}
 
-	// Normal mode: show captured content
+	// Normal mode: show captured content, cut to the pane width (see PreviewPane.String).
 	lines := strings.Split(content, "\n")
+	for i, l := range lines {
+		lines[i] = ansi.Truncate(l, width, "")
+	}
 
 	if height > 0 {
 		if len(lines) > height {

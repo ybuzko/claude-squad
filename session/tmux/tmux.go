@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -288,6 +289,70 @@ func (t *TmuxSession) sendKey(key string) error {
 	return t.cmdExec.Run(exec.Command("tmux", "send-keys", "-t", t.sanitizedName, key))
 }
 
+// ResetCursorKeys puts the terminal back in normal cursor-key and keypad mode
+// (DECCKM off, DECKPNM). In application cursor mode terminals send Home/End as
+// ESC O H / ESC O F instead of the sequences bubbletea decodes.
+const ResetCursorKeys = "\x1b[?1l\x1b>"
+
+// wheelLinesPerNotch is how many wheel events one scroll step sends to the program;
+// terminals usually scroll about three lines per notch.
+const wheelLinesPerNotch = 3
+
+// ForwardScroll scrolls the program inside the pane rather than tmux's scrollback.
+// Full-screen programs such as Claude Code draw on the alternate screen, which has no
+// tmux history, so they have to scroll their own view. When the program tracks the
+// mouse in SGR mode it gets wheel events; on the alternate screen without mouse
+// tracking it gets PageUp/PageDown. Returns false when neither applies, and the caller
+// falls back to scrolling tmux's history.
+func (t *TmuxSession) ForwardScroll(up bool) (bool, error) {
+	out, err := t.cmdExec.Output(exec.Command("tmux", "display-message", "-p", "-t", t.sanitizedName,
+		"#{alternate_on} #{mouse_sgr_flag} #{mouse_any_flag} #{mouse_button_flag} #{mouse_standard_flag} #{pane_width} #{pane_height}"))
+	// Without the pane's modes, fall back to tmux history rather than failing the scroll.
+	if err != nil {
+		log.WarningLog.Printf("could not query pane modes for %s: %v", t.sanitizedName, err)
+		return false, nil
+	}
+	f := strings.Fields(string(out))
+	if len(f) != 7 {
+		log.WarningLog.Printf("unexpected pane mode output for %s: %q", t.sanitizedName, out)
+		return false, nil
+	}
+	alt, sgr := f[0] == "1", f[1] == "1"
+	tracking := f[2] == "1" || f[3] == "1" || f[4] == "1"
+	switch {
+	case sgr && tracking:
+		width, _ := strconv.Atoi(f[5])
+		height, _ := strconv.Atoi(f[6])
+		button := 65 // wheel down
+		if up {
+			button = 64
+		}
+		event := fmt.Sprintf("\x1b[<%d;%d;%dM", button, max(width/2, 1), max(height/2, 1))
+		for i := 0; i < wheelLinesPerNotch; i++ {
+			if err := t.sendHex(event); err != nil {
+				return true, err
+			}
+		}
+		return true, nil
+	case alt:
+		key := "PageDown"
+		if up {
+			key = "PageUp"
+		}
+		return true, t.sendKey(key)
+	}
+	return false, nil
+}
+
+// sendHex sends raw bytes to the pane as input (tmux send-keys -H).
+func (t *TmuxSession) sendHex(raw string) error {
+	args := []string{"send-keys", "-t", t.sanitizedName, "-H"}
+	for _, b := range []byte(raw) {
+		args = append(args, fmt.Sprintf("%02x", b))
+	}
+	return t.cmdExec.Run(exec.Command("tmux", args...))
+}
+
 // Restore attaches to an existing session and restores the window size
 func (t *TmuxSession) Restore() error {
 	// attach-session against a missing session still forks a process successfully, so the
@@ -511,6 +576,10 @@ func (t *TmuxSession) Detach() {
 		log.ErrorLog.Println(msg)
 		panic(msg)
 	}
+	// The attached tmux client switched the terminal to application cursor mode and
+	// closing it abruptly leaves it there, so Home/End stop working. Switch it back.
+	_, _ = os.Stdout.WriteString(ResetCursorKeys)
+
 	// Attach goroutines should die on EOF due to the ptmx closing. Call
 	// t.Restore to set a new t.ptmx.
 	if err = t.Restore(); err != nil {
