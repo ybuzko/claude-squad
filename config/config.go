@@ -83,7 +83,7 @@ const (
 	DefaultInstanceLimit         = 10
 	defaultLinearPollIntervalSec = 60
 	defaultLinearMaxConcurrent   = 5
-	defaultSpawnProgram          = `claude "/triage {ISSUE_ID}"`
+	defaultSpawnProgram          = `claude "/triage-linear-ticket {ISSUE_ID}"`
 	defaultSpawnBranchPrefix     = "agent/"
 )
 

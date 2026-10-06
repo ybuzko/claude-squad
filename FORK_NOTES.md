@@ -95,7 +95,7 @@ File: `~/.claude-squad/status/<ISSUE-ID>.json`
     "done_state_ids": []
   },
   "spawn": {
-    "program": "claude \"/triage {ISSUE_ID}\"",
+    "program": "claude \"/triage-linear-ticket {ISSUE_ID}\"",
     "repo_path": "/home/yaroslav/agent1/backend",
     "branch_prefix": "agent/"
   },
