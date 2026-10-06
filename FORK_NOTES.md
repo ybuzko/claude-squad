@@ -22,8 +22,8 @@ Where the fork hooks in. Keep this table current when rebasing.
 | Worktree + branch | `session/git/worktree.go`: branch = `BranchPrefix + title` (lowercased by `sanitizeBranchName`), path `~/.claude-squad/worktrees/<branch>_<hex>`, base = `HEAD` of repo | `NewGitWorktreeForBranch(...)` takes an explicit branch + base ref (`origin/main`, fetched first) |
 | Pause / Resume / Kill | `Instance.Pause()` keeps branch + path; `Resume()` restarts tmux with the same `Program`; `Kill()` drops worktree **and** branch | ticket instances: `D` pauses (branch kept); `D` on Paused/Done kills; `Resume()` uses `claude --resume <session>` / `claude -c` |
 | Config | `config/config.go`, `~/.claude-squad/config.json`, `cs debug` | `linear`, `spawn`, `instance_limit` sections |
-| List rendering | `ui/list.go` `List.items` (user-ordered via J/K), `InstanceRenderer.Render` glyph by status, header `" Instances "` | urgency sort (blocked → idle → running → paused → done), header counts |
-| Trust prompt | `Instance.CheckAndHandleTrustPrompt()` exists upstream but is never called | called on a short backoff after auto-spawn |
+| List rendering | `ui/list.go` `List.items` (user-ordered via J/K), `InstanceRenderer.Render` glyph by status, header `" Instances "` | urgency sort (blocked → idle → running → paused → done), header counts; compact two-line rows, scrolled window that follows the selection with `↑/↓ N more` hints (upstream overflowed the viewport) |
+| Trust prompt | `Instance.CheckAndHandleTrustPrompt()` exists upstream but is never called | called on a backoff (1–21 s) after auto-spawn; moves the selection to "Yes, I trust this folder" before confirming, since current Claude Code defaults to "No, exit" |
 | Entry point | `main.go` cobra root; requires cwd to be a git repo | `--linear` flag; `cs hook` subcommand; cwd check relaxed when `spawn.repo_path` is set |
 
 Dead code upstream worth knowing: `instanceStartDoneMsg` / `runInstanceStartCmd`
@@ -45,8 +45,9 @@ unset, the hooks are inert in every Claude Code session the dispatcher did not s
 Verified live against the TSA "Mine" view: auto-spawn with the concurrency cap,
 hook-driven idle/blocked, pause → `claude --resume` after the tmux server lost the
 session, `t` spawn of a ticket outside the poller's reach, Done detection, delete.
-Claude Code did **not** show a trust dialog for worktrees of an already-trusted repo;
-the auto-dismiss stays in as a safety net.
+Claude Code records trust for a worktree under its main repo, so once `spawn.repo_path`
+is trusted, new worktrees open without the dialog. A fresh clone is untrusted: the first
+batch of spawns all hit the dialog, which the auto-dismiss answers.
 
 ## Keys added or changed in Linear mode
 

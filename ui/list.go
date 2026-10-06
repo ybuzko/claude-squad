@@ -46,20 +46,20 @@ var pausedStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.AdaptiveColor{Light: "#888888", Dark: "#888888"})
 
 var titleStyle = lipgloss.NewStyle().
-	Padding(1, 1, 0, 1).
+	Padding(0, 1).
 	Foreground(lipgloss.AdaptiveColor{Light: "#1a1a1a", Dark: "#dddddd"})
 
 var listDescStyle = lipgloss.NewStyle().
-	Padding(0, 1, 1, 1).
+	Padding(0, 1).
 	Foreground(lipgloss.AdaptiveColor{Light: "#A49FA5", Dark: "#777777"})
 
 var selectedTitleStyle = lipgloss.NewStyle().
-	Padding(1, 1, 0, 1).
+	Padding(0, 1).
 	Background(lipgloss.Color("#dde4f0")).
 	Foreground(lipgloss.AdaptiveColor{Light: "#1a1a1a", Dark: "#1a1a1a"})
 
 var selectedDescStyle = lipgloss.NewStyle().
-	Padding(0, 1, 1, 1).
+	Padding(0, 1).
 	Background(lipgloss.Color("#dde4f0")).
 	Foreground(lipgloss.AdaptiveColor{Light: "#1a1a1a", Dark: "#1a1a1a"})
 
@@ -67,13 +67,19 @@ var mainTitle = lipgloss.NewStyle().
 	Background(lipgloss.Color("62")).
 	Foreground(lipgloss.Color("230"))
 
+var scrollHintStyle = lipgloss.NewStyle().
+	Foreground(lipgloss.AdaptiveColor{Light: "#A49FA5", Dark: "#777777"})
+
 var autoYesStyle = lipgloss.NewStyle().
 	Background(lipgloss.Color("#dde4f0")).
 	Foreground(lipgloss.Color("#1a1a1a"))
 
 type List struct {
-	items         []*session.Instance
-	selectedIdx   int
+	items       []*session.Instance
+	selectedIdx int
+	// offset is the index of the first item shown when the list is taller than its
+	// viewport. String keeps the selected item inside the visible window.
+	offset        int
 	height, width int
 	renderer      *InstanceRenderer
 	autoyes       bool
@@ -327,7 +333,6 @@ func (l *List) String() string {
 	// Write the title.
 	var b strings.Builder
 	b.WriteString("\n")
-	b.WriteString("\n")
 
 	// Write title line
 	// add padding of 2 because the border on list items adds some extra characters
@@ -362,14 +367,66 @@ func (l *List) String() string {
 	b.WriteString("\n")
 	b.WriteString("\n")
 
-	// Render the list.
-	for i, item := range l.items {
-		b.WriteString(l.renderer.Render(item, i+1, i == l.selectedIdx, len(l.repos) > 1))
-		if i != len(l.items)-1 {
-			b.WriteString("\n\n")
+	// Render the visible window of the list.
+	start, end := l.visibleRange(l.height - listHeaderLines)
+	if start > 0 {
+		b.WriteString(scrollHintStyle.Render(fmt.Sprintf("   ↑ %d more", start)))
+		b.WriteString("\n")
+	}
+	for i := start; i < end; i++ {
+		b.WriteString(l.renderer.Render(l.items[i], i+1, i == l.selectedIdx, len(l.repos) > 1))
+		if i != end-1 {
+			b.WriteString("\n")
 		}
 	}
-	return lipgloss.Place(l.width, l.height, lipgloss.Left, lipgloss.Top, b.String())
+	if end < len(l.items) {
+		b.WriteString("\n")
+		b.WriteString(scrollHintStyle.Render(fmt.Sprintf("   ↓ %d more", len(l.items)-end)))
+	}
+
+	// Never render taller than the viewport, whatever the terminal size.
+	out := b.String()
+	if l.height > 0 {
+		if lines := strings.Split(out, "\n"); len(lines) > l.height {
+			out = strings.Join(lines[:l.height], "\n")
+		}
+	}
+	return lipgloss.Place(l.width, l.height, lipgloss.Left, lipgloss.Top, out)
+}
+
+const (
+	// listHeaderLines is the blank line, title line and spacer above the first item.
+	listHeaderLines = 3
+	// itemLines is the height of one rendered item: title line and branch line.
+	itemLines = 2
+)
+
+// visibleRange returns the [start, end) slice of items that fits in avail lines,
+// scrolled so the selected item is shown. When not everything fits, one line at
+// each end is reserved for the "N more" hints.
+func (l *List) visibleRange(avail int) (start, end int) {
+	n := len(l.items)
+	if n*itemLines <= avail || l.height <= 0 {
+		l.offset = 0
+		return 0, n
+	}
+	perPage := (avail - 2) / itemLines
+	if perPage < 1 {
+		perPage = 1
+	}
+	if l.selectedIdx < l.offset {
+		l.offset = l.selectedIdx
+	}
+	if l.selectedIdx >= l.offset+perPage {
+		l.offset = l.selectedIdx - perPage + 1
+	}
+	if l.offset > n-perPage {
+		l.offset = n - perPage
+	}
+	if l.offset < 0 {
+		l.offset = 0
+	}
+	return l.offset, l.offset + perPage
 }
 
 // Down selects the next item in the list.

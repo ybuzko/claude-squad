@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/creack/pty"
 )
 
@@ -200,13 +201,7 @@ func (t *TmuxSession) CheckAndHandleTrustPrompt() bool {
 	}
 
 	if BaseProgram(t.program) == ProgramClaude {
-		if strings.Contains(content, "Do you trust the files in this folder?") ||
-			strings.Contains(content, "new MCP server") {
-			if err := t.TapEnter(); err != nil {
-				log.ErrorLog.Printf("could not tap enter on trust/MCP screen: %v", err)
-			}
-			return true
-		}
+		return t.answerClaudeTrustPrompt(content)
 	} else {
 		if strings.Contains(content, "Open documentation url for more info") {
 			if err := t.TapDAndEnter(); err != nil {
@@ -216,6 +211,81 @@ func (t *TmuxSession) CheckAndHandleTrustPrompt() bool {
 		}
 	}
 	return false
+}
+
+// Claude Code's folder-trust dialog. Current versions ask "Is this a project you
+// created or one you trust?" with "No, exit" highlighted by default, so a bare Enter
+// would quit; older versions asked trustPromptLegacy with "Yes" as the default.
+const (
+	trustPromptAccept = "Yes, I trust this folder"
+	trustPromptLegacy = "Do you trust the files in this folder?"
+	mcpServerPrompt   = "new MCP server"
+	selectCursor      = "❯"
+)
+
+type trustAction int
+
+const (
+	trustNone  trustAction = iota // no trust dialog on screen
+	trustEnter                    // the accepting option is selected: confirm it
+	trustDown                     // another option is selected: move down first
+)
+
+// trustPromptAction decides how to answer the trust dialog in a captured pane.
+func trustPromptAction(pane string) trustAction {
+	pane = ansi.Strip(pane)
+	if strings.Contains(pane, trustPromptAccept) {
+		for _, line := range strings.Split(pane, "\n") {
+			if strings.Contains(line, selectCursor) {
+				if strings.Contains(line, trustPromptAccept) {
+					return trustEnter
+				}
+				return trustDown
+			}
+		}
+		return trustDown
+	}
+	if strings.Contains(pane, trustPromptLegacy) || strings.Contains(pane, mcpServerPrompt) {
+		return trustEnter
+	}
+	return trustNone
+}
+
+// answerClaudeTrustPrompt accepts Claude Code's trust dialog if one is showing,
+// moving the selection onto the accepting option before confirming. It re-reads the
+// pane after every move so it never confirms "No, exit". Returns true if a dialog
+// was found.
+func (t *TmuxSession) answerClaudeTrustPrompt(content string) bool {
+	found := false
+	for step := 0; step < 4; step++ {
+		switch trustPromptAction(content) {
+		case trustNone:
+			return found
+		case trustEnter:
+			if err := t.sendKey("Enter"); err != nil {
+				log.ErrorLog.Printf("could not confirm trust dialog for %s: %v", t.sanitizedName, err)
+			}
+			return true
+		case trustDown:
+			found = true
+			if err := t.sendKey("Down"); err != nil {
+				log.ErrorLog.Printf("could not move selection in trust dialog for %s: %v", t.sanitizedName, err)
+				return true
+			}
+			time.Sleep(200 * time.Millisecond)
+			var err error
+			if content, err = t.CapturePaneContent(); err != nil {
+				return true
+			}
+		}
+	}
+	log.WarningLog.Printf("trust dialog for %s: accepting option never got selected", t.sanitizedName)
+	return true
+}
+
+// sendKey sends one named key (tmux send-keys syntax) to the session's pane.
+func (t *TmuxSession) sendKey(key string) error {
+	return t.cmdExec.Run(exec.Command("tmux", "send-keys", "-t", t.sanitizedName, key))
 }
 
 // Restore attaches to an existing session and restores the window size

@@ -276,6 +276,7 @@ func (m *home) spawnTicket(issue linear.Issue) (tea.Cmd, error) {
 // trustPromptDelays spaces out the checks for Claude Code's trust dialog after spawn.
 var trustPromptDelays = []time.Duration{
 	1 * time.Second, 2 * time.Second, 3 * time.Second, 5 * time.Second, 8 * time.Second,
+	13 * time.Second, 21 * time.Second,
 }
 
 func (m *home) trustPromptCheckCmd(instance *session.Instance, attempt int) tea.Cmd {
