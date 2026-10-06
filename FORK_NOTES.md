@@ -88,7 +88,7 @@ File: `~/.claude-squad/status/<ISSUE-ID>.json`
   "linear": {
     "enabled": true,
     "api_key": "",
-    "view_id": "1f3cf867-a139-4c52-a6b3-2023b8bfeeb1",
+    "view_id": "a3dd49a15e58",
     "poll_interval_sec": 60,
     "max_concurrent": 5,
     "done_state_types": ["completed", "canceled"],
@@ -105,7 +105,10 @@ File: `~/.claude-squad/status/<ISSUE-ID>.json`
 ```
 
 - `LINEAR_API_KEY` in the environment overrides `linear.api_key`.
-- `view_id` is the UUID in the Linear view URL (`linear.app/<ws>/view/<uuid>`).
+- `view_id` is the view's UUID or the slug id that ends its URL
+  (`linear.app/<ws>/team/<team>/view/<name>-<slugId>` → `<slugId>`).
+- The view is the only filter: every issue it returns gets a session. Exclude
+  finished, assigned-elsewhere, or otherwise unwanted tickets in the view itself.
 - `max_concurrent` caps instances that are actually working (`Running`/`Loading`);
   `blocked`, `idle`, `Paused`, `Done` do not count. `instance_limit` caps the total.
 - Done detection: an instance is `Done` when its issue's workflow state has a type in
