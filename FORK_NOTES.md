@@ -16,7 +16,7 @@ Where the fork hooks in. Keep this table current when rebasing.
 | Instance struct + `Status` enum | `session/instance.go` — `Running/Ready/Loading/Paused` as ints | `Blocked`, `Done` appended (JSON-compatible); `IssueID`, `IssueUUID`, `IssueURL`, `ClaudeSessionID` fields |
 | Persistence | `session/storage.go` `InstanceData` → `~/.claude-squad/state.json` `instances[]` | mirrors the new fields, incl. `archived`, `archived_at`, `in_view`; archived instances live in the same array. Every save goes through `home.saveInstances()` (active list + archive): saving `m.list` alone would drop the archive |
 | Instance creation | `app/app.go` `KeyNew`: `session.NewInstance` → `list.AddInstance` (finalizer) → `SetStatus(Loading)` → finalizer → background `Start(true)` → `instanceStartedMsg` | `app/dispatch.go` reuses exactly this path; `instanceStartedMsg.autoSpawned` suppresses focus steal + help overlay |
-| Tick loop | `app/app.go`: `previewTickMsg` (100 ms, redraw) and `tickUpdateMetadataCmd` → `metadataUpdateDoneMsg` (500 ms; `HasUpdated()` + git diff per instance in goroutines, then sets `Running`/`Ready` on the main thread) | status-file read rides the 500 ms tick; `metadataUpdateDoneMsg` prefers hook state over the pane-diff heuristic; a third chained cmd (`linearPollTickMsg`) polls Linear |
+| Tick loop | `app/app.go`: `previewTickMsg` (100 ms, redraw) and `tickUpdateMetadataCmd` → `metadataUpdateDoneMsg` (500 ms; `HasUpdated()` + git diff per instance in goroutines, then sets `Running`/`Ready` on the main thread) | status-file read rides the 500 ms tick; diff stats (`git add -N .` + `git diff`, ~0.1–0.15 s CPU each in the backend repo) are throttled per instance by `session/diff_schedule.go`: selected every 5 s, others only after activity (pane or hook status changed) at most every 5 s, else every 60 s — upstream ran them for every instance every 500 ms, ~0.6 core per idle session; `metadataUpdateDoneMsg` prefers hook state over the pane-diff heuristic; a third chained cmd (`linearPollTickMsg`) polls Linear |
 | Status heuristic | `session/tmux/tmux.go` `HasUpdated()` — sha256 of `capture-pane`; changed → `Running`, else `Ready` | unchanged; used only for instances without a status file |
 | tmux session | `tmux new-session -d -s claudesquad_<title> -c <worktree> <program>` | `-e CS_ISSUE_ID=<id>` added for ticket instances |
 | Worktree + branch | `session/git/worktree.go`: branch = `BranchPrefix + title` (lowercased by `sanitizeBranchName`), path `~/.claude-squad/worktrees/<branch>_<hex>`, base = `HEAD` of repo | `NewGitWorktreeForBranch(...)` takes an explicit branch + base ref (`origin/main`, fetched first) |
@@ -80,6 +80,8 @@ with their full context.
 - **Archived by hand (`D`) while still in the view** stays archived until the ticket
   leaves and comes back. Tickets started with `t` from outside the view are archived by
   the poller only after they have entered the view and left it.
+- A session paused because its tmux died keeps its worktree on disk; archiving it
+  commits any uncommitted work to the branch (locally) and removes that worktree too.
 - If archiving fails (e.g. the commit fails), the session goes back to the active list
   and an automatic archive is retried on the next poll.
 - Permanent delete (archive view, `D`) removes the record, branch and status file. The
@@ -116,7 +118,7 @@ File: `~/.claude-squad/status/<ISSUE-ID>.json`
     "enabled": true,
     "api_key": "",
     "view_id": "a3dd49a15e58",
-    "poll_interval_sec": 60,
+    "poll_interval_sec": 15,
     "max_concurrent": 5,
     "done_state_types": ["completed", "canceled"],
     "done_state_ids": []

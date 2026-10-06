@@ -88,6 +88,8 @@ type Instance struct {
 	// Restoring is true while an archived instance is being brought back (worktree,
 	// setup command, tmux). Not persisted.
 	Restoring bool
+	// diffSched throttles diff-stat refreshes; see diff_schedule.go.
+	diffSched diffSchedule
 
 	// DiffStats stores the current git diff statistics
 	diffStats *git.DiffStats
@@ -696,8 +698,44 @@ func (i *Instance) StopForArchive() error {
 		if err := i.Pause(); err != nil {
 			return err
 		}
+	} else if err := i.removeLeftoverWorktree(); err != nil {
+		return err
 	}
 	return i.CloseTmux()
+}
+
+// removeLeftoverWorktree handles an instance that was paused because its tmux session
+// died: Pause left the worktree on disk so no work was lost. Commit anything
+// uncommitted to the branch (locally, nothing is pushed) and remove the worktree, as
+// Pause does for a live instance.
+func (i *Instance) removeLeftoverWorktree() error {
+	if i.gitWorktree == nil {
+		return nil
+	}
+	valid, err := i.gitWorktree.IsValidWorktree()
+	if err != nil {
+		return fmt.Errorf("failed to validate worktree: %w", err)
+	}
+	if !valid {
+		return nil
+	}
+	dirty, err := i.gitWorktree.IsDirty()
+	if err != nil {
+		return fmt.Errorf("failed to check if worktree is dirty: %w", err)
+	}
+	if dirty {
+		commitMsg := fmt.Sprintf("[claudesquad] update from '%s' on %s (archived)", i.Title, time.Now().Format(time.RFC822))
+		if err := i.gitWorktree.CommitChanges(commitMsg); err != nil {
+			return fmt.Errorf("failed to commit changes: %w", err)
+		}
+	}
+	if err := i.gitWorktree.Remove(); err != nil {
+		return fmt.Errorf("failed to remove git worktree: %w", err)
+	}
+	if err := i.gitWorktree.Prune(); err != nil {
+		return fmt.Errorf("failed to prune git worktrees: %w", err)
+	}
+	return nil
 }
 
 // CloseTmux kills the tmux session (and the program in it) while leaving the

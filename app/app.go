@@ -290,6 +290,9 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			default:
 				r.instance.SetStatus(session.Ready)
 			}
+			if !r.diffComputed {
+				continue
+			}
 			if r.diffStats != nil && r.diffStats.Error != nil {
 				if !strings.Contains(r.diffStats.Error.Error(), "base commit SHA not set") {
 					log.WarningLog.Printf("could not update diff stats: %v", r.diffStats.Error)
@@ -1073,6 +1076,8 @@ type instanceMetaResult struct {
 	updated   bool
 	hasPrompt bool
 	diffStats *git.DiffStats
+	// diffComputed is false when this tick skipped the diff; the old stats stay.
+	diffComputed bool
 	// hook is the Claude Code hook status for ticket instances; nil when none exists.
 	hook *status.Status
 }
@@ -1136,17 +1141,29 @@ func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instanc
 				r := &results[i]
 				r.instance = instance
 				r.updated, r.hasPrompt = instance.HasUpdated()
+				var hookTS int64
 				if instance.IsTicket() {
 					hs, err := status.Read(instance.IssueID)
 					if err != nil {
 						log.WarningLog.Printf("could not read hook status for %s: %v", instance.IssueID, err)
 					}
 					r.hook = hs
+					if hs != nil {
+						hookTS = hs.TS
+					}
 				}
-				if instance == selected {
-					r.diffStats = instance.ComputeDiff()
-				} else {
-					r.diffStats = instance.ComputeDiffNumstat()
+				// Diff stats are the expensive part (git add -N + git diff); refresh them
+				// only when the instance may have changed. See session/diff_schedule.go.
+				instance.NoteDiffActivity(r.updated, hookTS)
+				now := time.Now()
+				if instance.DiffDue(now, instance == selected) {
+					if instance == selected {
+						r.diffStats = instance.ComputeDiff()
+					} else {
+						r.diffStats = instance.ComputeDiffNumstat()
+					}
+					r.diffComputed = true
+					instance.MarkDiffComputed(now, instance == selected)
 				}
 			}(idx, inst)
 		}

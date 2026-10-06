@@ -89,7 +89,7 @@ type Config struct {
 
 const (
 	DefaultInstanceLimit         = 10
-	defaultLinearPollIntervalSec = 60
+	defaultLinearPollIntervalSec = 15
 	defaultLinearMaxConcurrent   = 5
 	defaultSpawnProgram          = `claude "/triage-linear-ticket {ISSUE_ID}"`
 	defaultSpawnBranchPrefix     = "agent/"
