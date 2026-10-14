@@ -62,6 +62,14 @@ whatever the window is), so attached sessions came up at that size until a coupl
 resizes. Every PTY cs starts or resizes now carries a nominal pixel size
 (`tmux.winsize`), so tmux never asks.
 
+Attach uses a fresh tmux client: cs keeps one background client per session for
+sizing the preview, and nothing reads its output while the overview shows, so tens of
+KB of frames drawn for the preview size pile up in its PTY. Attaching used to copy that
+backlog to the terminal and leave a stale picture until a resize or two forced a full
+redraw. `Attach` now replaces it with a new client started at the terminal's size
+(`freshClient`), and the client started on detach starts at the last preview size
+instead of 80x24.
+
 Dead code upstream worth knowing: `instanceStartDoneMsg` / `runInstanceStartCmd`
 in `app/app.go` are unused; `instanceStartedMsg` is the live path.
 

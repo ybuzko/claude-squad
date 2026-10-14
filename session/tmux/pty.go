@@ -19,6 +19,16 @@ func (pt Pty) Start(cmd *exec.Cmd) (*os.File, error) {
 	return pty.StartWithSize(cmd, winsize(80, 24))
 }
 
+func (pt Pty) StartWithSize(cmd *exec.Cmd, cols, rows int) (*os.File, error) {
+	return pty.StartWithSize(cmd, winsize(cols, rows))
+}
+
+// sizedPtyFactory is a PtyFactory that can start the PTY at a given size, so the
+// program's first frame already has it.
+type sizedPtyFactory interface {
+	StartWithSize(cmd *exec.Cmd, cols, rows int) (*os.File, error)
+}
+
 // Nominal cell size in pixels reported with every PTY size cs sets. tmux (3.6+) sends
 // the terminal CSI 18t / 14t size queries whenever the pixel size is zero, and adopts
 // the reply over the PTY size. Windows Terminal answers with a stale size (its initial

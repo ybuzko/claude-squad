@@ -21,6 +21,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/creack/pty"
+	"golang.org/x/term"
 )
 
 const ProgramClaude = "claude"
@@ -50,6 +51,9 @@ type TmuxSession struct {
 	ptmx *os.File
 	// monitor monitors the tmux pane content and sends signals to the UI when it's status changes
 	monitor *statusMonitor
+	// detachedCols/detachedRows is the size last set with SetDetachedSize (0 = unknown);
+	// the background client started on detach starts at it.
+	detachedCols, detachedRows int
 
 	// Initialized by Attach
 	// Deinitilaized by Detach
@@ -371,12 +375,49 @@ func (t *TmuxSession) Restore() error {
 		return ErrSessionNotFound
 	}
 
-	ptmx, err := t.ptyFactory.Start(exec.Command("tmux", "attach-session", "-t", t.sanitizedName))
+	ptmx, err := t.startClient(t.detachedCols, t.detachedRows)
 	if err != nil {
-		return fmt.Errorf("error opening PTY: %w", err)
+		return err
 	}
 	t.ptmx = ptmx
 	t.monitor = newStatusMonitor()
+	return nil
+}
+
+// startClient starts a tmux client attached to the session in a new PTY of cols x rows
+// (the factory's default size when 0).
+func (t *TmuxSession) startClient(cols, rows int) (*os.File, error) {
+	attach := exec.Command("tmux", "attach-session", "-t", t.sanitizedName)
+	var ptmx *os.File
+	var err error
+	if f, ok := t.ptyFactory.(sizedPtyFactory); ok && cols > 0 && rows > 0 {
+		ptmx, err = f.StartWithSize(attach, cols, rows)
+	} else {
+		ptmx, err = t.ptyFactory.Start(attach)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("error opening PTY: %w", err)
+	}
+	return ptmx, nil
+}
+
+// freshClient replaces the background client with a new one of cols x rows. Nothing
+// reads the background client's output while cs shows its overview, so tens of KB of
+// frames drawn for the preview size pile up in its PTY; copying that backlog to the
+// terminal on attach left a stale picture until a resize forced a full redraw. A new
+// client draws its first frame for the real terminal, as a plain `tmux attach` does.
+func (t *TmuxSession) freshClient(cols, rows int) error {
+	if !t.DoesSessionExist() {
+		return ErrSessionNotFound
+	}
+	ptmx, err := t.startClient(cols, rows)
+	if err != nil {
+		return err
+	}
+	if t.ptmx != nil {
+		_ = t.ptmx.Close()
+	}
+	t.ptmx = ptmx
 	return nil
 }
 
@@ -446,6 +487,11 @@ func (t *TmuxSession) HasUpdated() (updated bool, hasPrompt bool) {
 }
 
 func (t *TmuxSession) Attach() (chan struct{}, error) {
+	if cols, rows, err := term.GetSize(int(os.Stdin.Fd())); err == nil {
+		if err := t.freshClient(cols, rows); err != nil {
+			return nil, err
+		}
+	}
 	t.attachCh = make(chan struct{})
 
 	t.wg = &sync.WaitGroup{}
@@ -640,6 +686,7 @@ func (t *TmuxSession) Close() error {
 // SetDetachedSize set the width and height of the session while detached. This makes the
 // tmux output conform to the specified shape.
 func (t *TmuxSession) SetDetachedSize(width, height int) error {
+	t.detachedCols, t.detachedRows = width, height
 	return t.updateWindowSize(width, height)
 }
 

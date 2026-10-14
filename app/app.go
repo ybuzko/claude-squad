@@ -95,6 +95,10 @@ type home struct {
 
 	// state is the current discrete state of the application
 	state state
+	// naming is the unstarted session whose title is being typed (stateNew) or whose
+	// prompt is being entered (statePrompt after N); nil otherwise. The list re-sorts, so
+	// its position cannot be relied on.
+	naming *session.Instance
 	// newInstanceFinalizer is called when the state is stateNew and then you press enter.
 	// It registers the new instance in the list after the instance has been started.
 	newInstanceFinalizer func()
@@ -378,7 +382,8 @@ func (m *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmds := []tea.Cmd{}
 		if m.dispatcher != nil {
-			if m.list.SortByUrgency() {
+			// Not while a new session is being named: its row would jump under the cursor.
+			if m.naming == nil && m.list.SortByUrgency() {
 				cmds = append(cmds, m.instanceChanged())
 			}
 			cmds = append(cmds, m.drainPending()...)
@@ -629,7 +634,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		if msg.String() == "ctrl+c" {
 			m.state = stateDefault
 			m.promptAfterName = false
-			m.list.Kill()
+			m.discardNaming()
 			return m, tea.Sequence(
 				tea.WindowSize(),
 				func() tea.Msg {
@@ -639,7 +644,12 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			)
 		}
 
-		instance := m.list.GetInstances()[m.list.NumInstances()-1]
+		instance := m.naming
+		if instance == nil {
+			m.state = stateDefault
+			m.menu.SetState(ui.StateDefault)
+			return m, nil
+		}
 		switch msg.Type {
 		// Start the instance (enable previews etc) and go back to the main menu state.
 		case tea.KeyEnter:
@@ -661,6 +671,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			// Set Loading status and finalize into the list immediately
 			instance.SetStatus(session.Loading)
 			m.newInstanceFinalizer()
+			m.naming = nil
 			m.promptAfterName = false
 			m.state = stateDefault
 			m.menu.SetState(ui.StateDefault)
@@ -696,7 +707,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 				return m, m.handleError(err)
 			}
 		case tea.KeyEsc:
-			m.list.Kill()
+			m.discardNaming()
 			m.state = stateDefault
 			m.instanceChanged()
 
@@ -722,6 +733,9 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		// Check if the form was submitted or canceled
 		if shouldClose {
 			selected := m.list.GetSelectedInstance()
+			if m.naming != nil {
+				selected = m.naming
+			}
 			if selected == nil {
 				return m, nil
 			}
@@ -748,6 +762,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 					// Finalize into list and start
 					selected.SetStatus(session.Loading)
 					m.newInstanceFinalizer()
+					m.naming = nil
 					m.textInputOverlay = nil
 					m.state = stateDefault
 					m.menu.SetState(ui.StateDefault)
@@ -884,6 +899,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 
 		m.newInstanceFinalizer = m.list.AddInstance(instance)
 		m.list.SetSelectedInstance(m.list.NumInstances() - 1)
+		m.naming = instance
 		m.state = stateNew
 		m.menu.SetState(ui.StateNewInstance)
 		m.promptAfterName = true
@@ -902,6 +918,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 
 		m.newInstanceFinalizer = m.list.AddInstance(instance)
 		m.list.SetSelectedInstance(m.list.NumInstances() - 1)
+		m.naming = instance
 		m.state = stateNew
 		m.menu.SetState(ui.StateNewInstance)
 
@@ -1305,12 +1322,28 @@ func (m *home) closeTicketOverlay() tea.Cmd {
 	)
 }
 
+// discardNaming removes the unstarted session being named, if any, keeping the
+// selection on whatever else was selected.
+func (m *home) discardNaming() {
+	inst := m.naming
+	m.naming = nil
+	if inst == nil || inst.Started() {
+		return
+	}
+	previous := m.list.GetSelectedInstance()
+	m.list.SelectInstance(inst)
+	if m.list.GetSelectedInstance() != inst {
+		return
+	}
+	m.list.Kill()
+	if previous != nil && previous != inst {
+		m.list.SelectInstance(previous)
+	}
+}
+
 // cancelPromptOverlay cancels the prompt overlay, cleaning up unstarted instances.
 func (m *home) cancelPromptOverlay() tea.Cmd {
-	selected := m.list.GetSelectedInstance()
-	if selected != nil && !selected.Started() {
-		m.list.Kill()
-	}
+	m.discardNaming()
 	m.textInputOverlay = nil
 	m.state = stateDefault
 	return tea.Sequence(
