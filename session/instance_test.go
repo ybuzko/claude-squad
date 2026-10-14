@@ -15,7 +15,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	log.Initialize(false)
+	log.InitializeForTest()
 	defer log.Close()
 	os.Exit(m.Run())
 }

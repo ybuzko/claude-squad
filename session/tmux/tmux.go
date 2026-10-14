@@ -289,10 +289,19 @@ func (t *TmuxSession) sendKey(key string) error {
 	return t.cmdExec.Run(exec.Command("tmux", "send-keys", "-t", t.sanitizedName, key))
 }
 
-// ResetCursorKeys puts the terminal back in normal cursor-key and keypad mode
-// (DECCKM off, DECKPNM). In application cursor mode terminals send Home/End as
-// ESC O H / ESC O F instead of the sequences bubbletea decodes.
-const ResetCursorKeys = "\x1b[?1l\x1b>"
+// ResetTerminalModes undoes what an attached tmux client may have changed in the
+// terminal. Detaching closes the client's pty, so tmux never gets to restore them:
+//   - ESC [r      full-screen scroll region (DECSTBM). A leftover region from attaching
+//     at a smaller size squeezes every frame into those rows; ConPTY keeps it across
+//     resizes.
+//   - ESC [?6l    origin mode off; ESC [?7h auto-wrap on; ESC [4l insert mode off
+//   - ESC (B      ASCII character set
+//   - ESC [?1l    normal cursor keys (DECCKM). In application mode Windows Terminal
+//     sends Home/End as ESC O H / ESC O F, which bubbletea does not decode.
+//   - ESC >       numeric keypad (DECKPNM)
+//
+// Resetting the scroll region and origin mode moves the cursor home.
+const ResetTerminalModes = "\x1b[r\x1b[?6l\x1b[?7h\x1b[4l\x1b(B\x1b[?1l\x1b>"
 
 // wheelLinesPerNotch is how many wheel events one scroll step sends to the program;
 // terminals usually scroll about three lines per notch.
@@ -576,9 +585,9 @@ func (t *TmuxSession) Detach() {
 		log.ErrorLog.Println(msg)
 		panic(msg)
 	}
-	// The attached tmux client switched the terminal to application cursor mode and
-	// closing it abruptly leaves it there, so Home/End stop working. Switch it back.
-	_, _ = os.Stdout.WriteString(ResetCursorKeys)
+	// The attached tmux client changed terminal modes (scroll region, cursor keys, ...)
+	// and closing it abruptly leaves them set. Restore them.
+	_, _ = os.Stdout.WriteString(ResetTerminalModes)
 
 	// Attach goroutines should die on EOF due to the ptmx closing. Call
 	// t.Restore to set a new t.ptmx.
@@ -636,12 +645,7 @@ func (t *TmuxSession) SetDetachedSize(width, height int) error {
 
 // updateWindowSize updates the window size of the PTY.
 func (t *TmuxSession) updateWindowSize(cols, rows int) error {
-	return pty.Setsize(t.ptmx, &pty.Winsize{
-		Rows: uint16(rows),
-		Cols: uint16(cols),
-		X:    0,
-		Y:    0,
-	})
+	return pty.Setsize(t.ptmx, winsize(cols, rows))
 }
 
 func (t *TmuxSession) DoesSessionExist() bool {

@@ -33,7 +33,7 @@ func (g *GitWorktree) Diff() *DiffStats {
 		return stats
 	}
 
-	content, err := g.runGitCommand(g.worktreePath, "--no-pager", "diff", g.GetBaseCommitSHA())
+	content, err := g.runGitCommand(g.worktreePath, "--no-pager", "diff", g.diffBase())
 	if err != nil {
 		stats.Error = err
 		return stats
@@ -51,6 +51,34 @@ func (g *GitWorktree) Diff() *DiffStats {
 	return stats
 }
 
+// diffBase is the commit the worktree's changes are measured from. Agents rebase their
+// branch onto origin's main branch (or check it out once their PR merged), which moves
+// HEAD far past the commit the worktree was created from; a diff against that commit
+// would count every upstream change since. So when the merge base of HEAD and the
+// upstream branch is newer than the creation commit, diff against the merge base: the
+// worktree's own changes, as a PR would show them.
+func (g *GitWorktree) diffBase() string {
+	base := g.GetBaseCommitSHA()
+	upstream := "origin/HEAD"
+	if strings.HasPrefix(g.baseRef, "origin/") {
+		upstream = g.baseRef
+	}
+	out, err := g.runGitCommand(g.worktreePath, "merge-base", "HEAD", upstream)
+	if err != nil {
+		return base
+	}
+	mergeBase := strings.TrimSpace(out)
+	if base == "" {
+		return mergeBase
+	}
+	if _, err := g.runGitCommand(g.worktreePath, "merge-base", "--is-ancestor", base, mergeBase); err != nil {
+		// The merge base is older than (or unrelated to) the creation commit, e.g.
+		// origin's ref is stale: the creation commit is the better base.
+		return base
+	}
+	return mergeBase
+}
+
 // DiffNumstat returns the added/removed line counts between the worktree and the
 // base branch without loading the full diff content into memory. Use this when
 // only the summary counts are needed (e.g. for unselected instances in the list).
@@ -64,7 +92,7 @@ func (g *GitWorktree) DiffNumstat() *DiffStats {
 		return stats
 	}
 
-	out, err := g.runGitCommand(g.worktreePath, "--no-pager", "diff", "--numstat", g.GetBaseCommitSHA())
+	out, err := g.runGitCommand(g.worktreePath, "--no-pager", "diff", "--numstat", g.diffBase())
 	if err != nil {
 		stats.Error = err
 		return stats

@@ -20,7 +20,7 @@ import (
 // TestMain runs before all tests to set up the test environment
 func TestMain(m *testing.M) {
 	// Initialize the logger before any tests run
-	log.Initialize(false)
+	log.InitializeForTest()
 	defer log.Close()
 
 	// Run all tests

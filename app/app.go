@@ -31,9 +31,8 @@ func Run(ctx context.Context, program string, autoYes bool, forceLinear bool) er
 	if err != nil {
 		return err
 	}
-	// A terminal left in application cursor mode sends Home/End as ESC O H / ESC O F,
-	// which bubbletea does not decode; start from normal mode.
-	os.Stdout.WriteString(tmux.ResetCursorKeys)
+	// Start from sane terminal modes; an earlier attach may have left them changed.
+	os.Stdout.WriteString(tmux.ResetTerminalModes)
 	p := tea.NewProgram(
 		h,
 		tea.WithAltScreen(),
@@ -88,6 +87,9 @@ type home struct {
 	ss3Pending bool
 	// listWidth is the width of the session list column, for mapping mouse clicks.
 	listWidth int
+	// repaintPending asks for a full repaint after the next update: set when returning
+	// from an attached session, whose tmux client drew over the screen.
+	repaintPending bool
 
 	// -- State --
 
@@ -290,6 +292,15 @@ func (m *home) Init() tea.Cmd {
 }
 
 func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	model, cmd := m.update(msg)
+	if m.repaintPending {
+		m.repaintPending = false
+		cmd = tea.Batch(cmd, tea.ClearScreen)
+	}
+	return model, cmd
+}
+
+func (m *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case hideErrMsg:
 		m.errBox.Clear()
@@ -1047,6 +1058,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 				}
 				<-ch
 				m.state = stateDefault
+				m.repaintPending = true
 			})
 			return m, nil
 		}
@@ -1059,6 +1071,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			}
 			<-ch
 			m.state = stateDefault
+			m.repaintPending = true
 			m.instanceChanged()
 		})
 		return m, nil
@@ -1338,7 +1351,11 @@ func (m *home) confirmAction(message string, action tea.Cmd) tea.Cmd {
 // from the top of a frame that is too tall, which hides the header and makes the whole
 // UI jump with every redraw; clipping here keeps the top in place.
 func (m *home) View() string {
-	return clipFrame(m.render(), m.termWidth, m.termHeight)
+	// Every frame starts with the terminal-mode reset, at the top-left where bubbletea
+	// begins drawing. It is zero-width and only re-sent when the first line is
+	// redrawn, so each full repaint (startup, resize, ctrl+l, after a detach) also
+	// repairs modes an attached tmux client left behind.
+	return tmux.ResetTerminalModes + clipFrame(m.render(), m.termWidth, m.termHeight)
 }
 
 func clipFrame(frame string, width, height int) string {

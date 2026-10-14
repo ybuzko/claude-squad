@@ -16,7 +16,7 @@ Where the fork hooks in. Keep this table current when rebasing.
 | Instance struct + `Status` enum | `session/instance.go` — `Running/Ready/Loading/Paused` as ints | `Blocked`, `Done` appended (JSON-compatible); `IssueID`, `IssueUUID`, `IssueURL`, `ClaudeSessionID` fields |
 | Persistence | `session/storage.go` `InstanceData` → `~/.claude-squad/state.json` `instances[]` | mirrors the new fields, incl. `archived`, `archived_at`, `in_view`; archived instances live in the same array. Every save goes through `home.saveInstances()` (active list + archive): saving `m.list` alone would drop the archive |
 | Instance creation | `app/app.go` `KeyNew`: `session.NewInstance` → `list.AddInstance` (finalizer) → `SetStatus(Loading)` → finalizer → background `Start(true)` → `instanceStartedMsg` | `app/dispatch.go` reuses exactly this path; `instanceStartedMsg.autoSpawned` suppresses focus steal + help overlay |
-| Tick loop | `app/app.go`: `previewTickMsg` (100 ms, redraw) and `tickUpdateMetadataCmd` → `metadataUpdateDoneMsg` (500 ms; `HasUpdated()` + git diff per instance in goroutines, then sets `Running`/`Ready` on the main thread) | status-file read rides the 500 ms tick; diff stats (`git add -N .` + `git diff`, ~0.1–0.15 s CPU each in the backend repo) are throttled per instance by `session/diff_schedule.go`: selected every 5 s, others only after activity (pane or hook status changed) at most every 5 s, else every 60 s — upstream ran them for every instance every 500 ms, ~0.6 core per idle session; `metadataUpdateDoneMsg` prefers hook state over the pane-diff heuristic; a third chained cmd (`linearPollTickMsg`) polls Linear |
+| Tick loop | `app/app.go`: `previewTickMsg` (100 ms, redraw) and `tickUpdateMetadataCmd` → `metadataUpdateDoneMsg` (500 ms; `HasUpdated()` + git diff per instance in goroutines, then sets `Running`/`Ready` on the main thread) | status-file read rides the 500 ms tick; diff stats (`git add -N .` + `git diff`, ~0.1–0.15 s CPU each in the backend repo) are throttled per instance by `session/diff_schedule.go`: selected every 5 s, others only after activity (pane or hook status changed) at most every 5 s, else every 60 s — upstream ran them for every instance every 500 ms, ~0.6 core per idle session; the diff base is the merge base of HEAD and `origin/HEAD` (or the spawn base ref) when that is newer than the worktree's creation commit (`git.diffBase`), since agents rebase onto origin/main and diffing against the creation commit counted all of main's changes since; `metadataUpdateDoneMsg` prefers hook state over the pane-diff heuristic; a third chained cmd (`linearPollTickMsg`) polls Linear |
 | Status heuristic | `session/tmux/tmux.go` `HasUpdated()` — sha256 of `capture-pane`; changed → `Running`, else `Ready` | unchanged; used only for instances without a status file |
 | tmux session | `tmux new-session -d -s claudesquad_<title> -c <worktree> <program>` | `-e CS_ISSUE_ID=<id>` added for ticket instances |
 | Worktree + branch | `session/git/worktree.go`: branch = `BranchPrefix + title` (lowercased by `sanitizeBranchName`), path `~/.claude-squad/worktrees/<branch>_<hex>`, base = `HEAD` of repo | `NewGitWorktreeForBranch(...)` takes an explicit branch + base ref (`origin/main`, fetched first) |
@@ -43,11 +43,24 @@ mouse) or PageUp/PageDown (alternate screen without mouse) into the pane instead
 the live preview shows the program's own scrolled view. Ordinary panes keep the history
 viewport, which now closes when another session is selected.
 
-Keys: attaching (`o`) runs a tmux client that switches the terminal to application
-cursor mode, and cs's detach closes it without switching back, after which Windows
-Terminal sends Home/End as `ESC O H`/`ESC O F` (bubbletea v1.3 reads them as alt+O + H/F).
-cs writes `ESC [?1l ESC >` at startup and after every detach, and `translateSS3` maps the
+Terminal modes: attaching (`o`) runs a tmux client in the real terminal, and cs's
+detach closes that client's pty, so tmux never restores what it changed. Two visible
+effects: a leftover scroll region (DECSTBM) from attaching at a smaller size squeezes
+every later frame into those rows (ConPTY keeps the region across resizes; tmux as a
+terminal resets it, so it does not reproduce there without setting one by hand), and
+application cursor mode makes Windows Terminal send Home/End as `ESC O H`/`ESC O F`
+(bubbletea v1.3 reads them as alt+O + H/F). `tmux.ResetTerminalModes` (scroll region,
+origin mode, auto-wrap, insert mode, charset, cursor keys, keypad) is written at startup
+and after every detach, and prefixes every frame, so each full repaint (resize, ctrl+l,
+the forced repaint after a detach) repairs the terminal. `translateSS3` maps the Home/End
 sequences anyway.
+
+Attached session size: tmux 3.6 sends the terminal `CSI 18t`/`CSI 14t` size queries
+whenever its PTY reports no pixel size, and adopts the `CSI 8;rows;cols t` reply over
+the PTY size. Windows Terminal (through ConPTY) answers with a stale size (163x41 here,
+whatever the window is), so attached sessions came up at that size until a couple of
+resizes. Every PTY cs starts or resizes now carries a nominal pixel size
+(`tmux.winsize`), so tmux never asks.
 
 Dead code upstream worth knowing: `instanceStartDoneMsg` / `runInstanceStartCmd`
 in `app/app.go` are unused; `instanceStartedMsg` is the live path.

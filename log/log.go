@@ -22,6 +22,15 @@ var globalLogFile *os.File
 // defer Close() after calling this function. It sets the go log output to the file in
 // the os temp directory.
 
+// InitializeForTest logs into a fresh temporary file, so tests never write into the
+// log of a cs that is running on the same machine.
+func InitializeForTest() {
+	if dir, err := os.MkdirTemp("", "claudesquad-test-"); err == nil {
+		logFileName = filepath.Join(dir, "claudesquad.log")
+	}
+	Initialize(false)
+}
+
 func Initialize(daemon bool) {
 	f, err := os.OpenFile(logFileName, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {

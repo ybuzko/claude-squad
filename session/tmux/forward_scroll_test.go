@@ -13,7 +13,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	log.Initialize(false)
+	log.InitializeForTest()
 	code := m.Run()
 	log.Close()
 	os.Exit(code)
