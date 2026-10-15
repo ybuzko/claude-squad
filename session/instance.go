@@ -298,6 +298,15 @@ func (i *Instance) newTmuxSession() *tmux.TmuxSession {
 // the Claude Code conversation continues instead of re-running the initial prompt.
 // Hand-created instances always get their original program back.
 func (i *Instance) ResumeProgram() string {
+	dir := ""
+	if i.gitWorktree != nil {
+		dir = i.gitWorktree.GetWorktreePath()
+	}
+	return i.resumeProgramIn(dir)
+}
+
+// resumeProgramIn is ResumeProgram for a worktree at dir ("" = unknown).
+func (i *Instance) resumeProgramIn(dir string) string {
 	if !i.IsTicket() {
 		return i.Program
 	}
@@ -309,7 +318,43 @@ func (i *Instance) ResumeProgram() string {
 	if i.ClaudeSessionID != "" {
 		return fmt.Sprintf("%s --resume %s", binary, i.ClaudeSessionID)
 	}
+	// `claude -c` exits at once when the directory has no conversation (the first
+	// session died before saving one), which ends the tmux session on every resume.
+	// Start the ticket over instead.
+	if dir != "" && !hasClaudeConversation(dir) {
+		return i.Program
+	}
 	return binary + " -c"
+}
+
+// hasClaudeConversation reports whether Claude Code has stored a conversation for dir:
+// a transcript in <config dir>/projects/<dir with every non-alphanumeric character
+// replaced by '-'>. Errors count as "yes" so the caller keeps trying to continue.
+func hasClaudeConversation(dir string) bool {
+	configDir := os.Getenv("CLAUDE_CONFIG_DIR")
+	if configDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return true
+		}
+		configDir = filepath.Join(home, ".claude")
+	}
+	project := []byte(dir)
+	for k, c := range project {
+		if !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9') {
+			project[k] = '-'
+		}
+	}
+	entries, err := os.ReadDir(filepath.Join(configDir, "projects", string(project)))
+	if err != nil {
+		return !os.IsNotExist(err)
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".jsonl") {
+			return true
+		}
+	}
+	return false
 }
 
 func (i *Instance) RepoName() (string, error) {

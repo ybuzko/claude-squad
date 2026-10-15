@@ -505,7 +505,7 @@ func (t *TmuxSession) Attach() (chan struct{}, error) {
 	// all the other ones.
 	go func() {
 		defer t.wg.Done()
-		_, _ = io.Copy(os.Stdout, t.ptmx)
+		_, _ = io.Copy(newAltScreenFilter(os.Stdout), t.ptmx)
 		// When io.Copy returns, it means the connection was closed
 		// This could be due to normal detach or Ctrl-D
 		// Check if the context is done to determine if it was a normal detach

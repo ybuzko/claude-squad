@@ -20,7 +20,7 @@ Where the fork hooks in. Keep this table current when rebasing.
 | Status heuristic | `session/tmux/tmux.go` `HasUpdated()` — sha256 of `capture-pane`; changed → `Running`, else `Ready` | unchanged; used only for instances without a status file |
 | tmux session | `tmux new-session -d -s claudesquad_<title> -c <worktree> <program>` | `-e CS_ISSUE_ID=<id>` added for ticket instances |
 | Worktree + branch | `session/git/worktree.go`: branch = `BranchPrefix + title` (lowercased by `sanitizeBranchName`), path `~/.claude-squad/worktrees/<branch>_<hex>`, base = `HEAD` of repo | `NewGitWorktreeForBranch(...)` takes an explicit branch + base ref (`origin/main`, fetched first) |
-| Pause / Resume / Kill | `Instance.Pause()` keeps branch + path; `Resume()` restarts tmux with the same `Program`; `Kill()` drops worktree **and** branch | ticket instances: `D` archives (`StopForArchive` = `Pause` + kill tmux); permanent delete (`Kill`) only from the archive view; `Resume()` uses `claude --resume <session>` / `claude -c` |
+| Pause / Resume / Kill | `Instance.Pause()` keeps branch + path; `Resume()` restarts tmux with the same `Program`; `Kill()` drops worktree **and** branch | ticket instances: `D` archives (`StopForArchive` = `Pause` + kill tmux); permanent delete (`Kill`) only from the archive view; `Resume()` uses `claude --resume <session>` / `claude -c`, or the original program when Claude never stored a conversation for the worktree (`claude -c` would exit at once and end the tmux session) |
 | Config | `config/config.go`, `~/.claude-squad/config.json`, `cs debug` | `linear`, `spawn`, `instance_limit` sections |
 | List rendering | `ui/list.go` `List.items` (user-ordered via J/K), `InstanceRenderer.Render` glyph by status, header `" Instances "` | urgency sort (blocked → idle → running → paused → done; idle sessions most recently idle first, by `StatusChangedAt`, taken from the hook timestamp for ticket sessions), header counts; `home`/`end` jump to first/last; compact two-line rows (ticket rows: `TSA-123 · <Linear state> (due 10/5)` over the ticket title, refreshed every poll, states containing "blocked" in red; other rows keep the branch); a left click selects a session (`List.ItemAtRow`), scrolled window that follows the selection with `↑/↓ N more` hints (upstream overflowed the viewport) |
 | Trust prompt | `Instance.CheckAndHandleTrustPrompt()` exists upstream but is never called | called on a backoff (1–21 s) after auto-spawn; moves the selection to "Yes, I trust this folder" before confirming, since current Claude Code defaults to "No, exit" |
@@ -69,6 +69,14 @@ backlog to the terminal and leave a stale picture until a resize or two forced a
 redraw. `Attach` now replaces it with a new client started at the terminal's size
 (`freshClient`), and the client started on detach starts at the last preview size
 instead of 80x24.
+
+The attached client's output passes through `tmux.altScreenFilter`, which drops tmux's
+alternate-screen switches (`\e[?1049h`/`l`). cs is already on the alternate screen, and
+on Windows Terminal the console (ConPTY) answers a repeated switch by rebuilding the
+alternate screen at the main screen's size. The main screen isn't resized while an app
+is on the alternate one, so after moving the window to another monitor every attach
+(and the overview after it) came back at the old size, wrapped and garbled until a
+resize, even though the size WSL reported was right.
 
 Dead code upstream worth knowing: `instanceStartDoneMsg` / `runInstanceStartCmd`
 in `app/app.go` are unused; `instanceStartedMsg` is the live path.
