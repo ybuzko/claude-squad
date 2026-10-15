@@ -287,11 +287,45 @@ func (i *Instance) IsTicket() bool {
 // newTmuxSession builds the tmux session for this instance. Ticket instances export
 // CS_ISSUE_ID so Claude Code hooks can report status for them.
 func (i *Instance) newTmuxSession() *tmux.TmuxSession {
-	s := tmux.NewTmuxSession(i.Title, i.Program)
+	s := tmux.NewTmuxSession(i.Title, i.withRemoteControl(i.Program))
 	if i.IsTicket() {
 		s.SetEnv(map[string]string{"CS_ISSUE_ID": i.IssueID})
 	}
 	return s
+}
+
+// withRemoteControl adds `--remote-control=<name>` to a Claude Code command, so the
+// session can also be reached from claude.ai and the Claude app. Other programs, and
+// commands that already set the flag, are returned unchanged.
+func (i *Instance) withRemoteControl(program string) string {
+	program = strings.TrimSpace(program)
+	if tmux.BaseProgram(program) != tmux.ProgramClaude {
+		return program
+	}
+	for _, f := range strings.Fields(program) {
+		if f == "--rc" || strings.HasPrefix(f, "--remote-control") || strings.HasPrefix(f, "--rc=") {
+			return program
+		}
+	}
+	end := strings.IndexAny(program, " \t")
+	if end < 0 {
+		end = len(program)
+	}
+	return program[:end] + " --remote-control=" + shellQuote(i.remoteControlName()) + program[end:]
+}
+
+// remoteControlName is the name the session shows under in the Claude app:
+// "TSA-196 <ticket title>" for tickets, the session title otherwise.
+func (i *Instance) remoteControlName() string {
+	if i.IsTicket() && i.IssueTitle != "" {
+		return i.IssueID + " " + i.IssueTitle
+	}
+	return i.Title
+}
+
+// shellQuote quotes s as one word for sh, which runs the command tmux is given.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // ResumeProgram is the command used to restart a ticket instance's tmux session so
@@ -847,7 +881,7 @@ func (i *Instance) Resume() error {
 
 	// A fresh tmux session for a ticket should continue the Claude Code conversation
 	// rather than re-run the initial triage prompt.
-	i.tmuxSession.SetProgram(i.ResumeProgram())
+	i.tmuxSession.SetProgram(i.withRemoteControl(i.ResumeProgram()))
 
 	// Check if tmux session still exists from pause, otherwise create new one
 	if i.tmuxSession.DoesSessionExist() {
