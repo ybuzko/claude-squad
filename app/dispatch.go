@@ -27,6 +27,8 @@ type dispatcher struct {
 	pending []linear.Issue
 	// polling is true while a poll is in flight, so a manual trigger cannot overlap it.
 	polling bool
+	// delivering holds sessions an update is being typed into (see deliverTicketUpdates).
+	delivering map[*session.Instance]bool
 }
 
 func newDispatcher(cfg *config.Config) (*dispatcher, error) {
@@ -59,12 +61,13 @@ func (d *dispatcher) pollInterval() time.Duration {
 // linearPollTickMsg asks the main loop to start a poll.
 type linearPollTickMsg struct{}
 
-// linearPollDoneMsg carries a finished poll: the view contents and the current
-// state of every ticket that already has an instance.
+// linearPollDoneMsg carries a finished poll: the view contents, the current state of
+// every ticket that already has an instance, and new comments on the watched ones.
 type linearPollDoneMsg struct {
-	view []linear.Issue
-	live []linear.Issue
-	err  error
+	view     []linear.Issue
+	live     []linear.Issue
+	comments []linear.Comment
+	err      error
 }
 
 // ticketLookupDoneMsg carries the result of a manual `t` lookup.
@@ -110,6 +113,12 @@ func (m *home) runPollCmd() tea.Cmd {
 			liveIDs = append(liveIDs, inst.IssueUUID)
 		}
 	}
+	watchIDs, since, seeded := m.watchedTickets(time.Now())
+	if seeded {
+		if err := m.saveInstances(); err != nil {
+			log.ErrorLog.Printf("saving instances: %v", err)
+		}
+	}
 
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(m.ctx, 45*time.Second)
@@ -123,7 +132,13 @@ func (m *home) runPollCmd() tea.Cmd {
 		if err != nil {
 			return linearPollDoneMsg{err: fmt.Errorf("linear state lookup: %w", err)}
 		}
-		return linearPollDoneMsg{view: view, live: live}
+		// The update watcher is best effort: a failed comment lookup is retried next poll
+		// and must not hold up spawning and archiving.
+		comments, err := d.client.CommentsSince(ctx, watchIDs, since)
+		if err != nil {
+			log.WarningLog.Printf("linear comment lookup: %v", err)
+		}
+		return linearPollDoneMsg{view: view, live: live, comments: comments}
 	}
 }
 
@@ -158,6 +173,8 @@ func (m *home) handlePollDone(msg linearPollDoneMsg) tea.Cmd {
 			cmds = append(cmds, m.handleError(err))
 		}
 	}
+
+	cmds = append(cmds, m.deliverTicketUpdates(msg.comments)...)
 
 	d.pending = plan.queue
 	cmds = append(cmds, m.drainPending()...)
@@ -285,6 +302,8 @@ func (m *home) spawnTicket(issue linear.Issue, inView bool) (tea.Cmd, error) {
 		return nil, err
 	}
 	instance.InView = inView
+	// The triage reads every comment so far; only later ones are updates.
+	instance.LinearSeenAt = time.Now()
 
 	finalize := m.list.AddInstance(instance)
 	instance.SetStatus(session.Loading)

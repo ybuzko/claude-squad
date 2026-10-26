@@ -41,6 +41,7 @@ func TestHandleHookStateTransitions(t *testing.T) {
 	s, _ = Read("TSA-1")
 	assert.Equal(t, StateBlocked, s.State)
 	assert.Equal(t, "Claude needs your permission to use Bash", s.Reason)
+	assert.False(t, s.AcceptsPrompt(), "a permission dialog would swallow typed text")
 
 	handle(t, "TSA-1", `{"hook_event_name":"PostToolUse","tool_name":"Bash","session_id":"sess-1"}`)
 	s, _ = Read("TSA-1")
@@ -51,6 +52,12 @@ func TestHandleHookStateTransitions(t *testing.T) {
 	s, _ = Read("TSA-1")
 	assert.Equal(t, StateIdle, s.State)
 	assert.Equal(t, "Shall I proceed with the backfill (12,340 rows)?", s.Reason)
+	assert.True(t, s.AcceptsPrompt())
+
+	handle(t, "TSA-1", `{"hook_event_name":"Notification","notification_type":"idle_prompt","message":"Claude is waiting for your input","session_id":"sess-1"}`)
+	s, _ = Read("TSA-1")
+	assert.Equal(t, StateBlocked, s.State)
+	assert.True(t, s.AcceptsPrompt(), "idle_prompt only means the turn ended a while ago")
 
 	handle(t, "TSA-1", `{"hook_event_name":"UserPromptSubmit","user_input":"yes","session_id":"sess-1"}`)
 	s, _ = Read("TSA-1")

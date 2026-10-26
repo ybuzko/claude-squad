@@ -1,6 +1,7 @@
 // Package linear is a read-only client for the Linear GraphQL API. The dispatcher
 // only ever reads from Linear: it discovers tickets in a view and watches their
-// workflow state. It never assigns, transitions, or comments.
+// workflow state, and reads comments for the update watcher. It never assigns,
+// transitions, or comments.
 package linear
 
 import (
@@ -10,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"time"
 )
 
@@ -206,6 +208,85 @@ func (c *Client) IssuesByID(ctx context.Context, ids []string) ([]Issue, error) 
 		out = append(out, n.toIssue())
 	}
 	return out, nil
+}
+
+// Comment is a comment on an issue, as the update watcher needs it.
+type Comment struct {
+	ID string
+	// IssueID is the issue's Linear UUID.
+	IssueID string
+	Author  string
+	// IsMe is true for comments by the API key's own user.
+	IsMe      bool
+	CreatedAt time.Time
+}
+
+const commentsSinceQuery = `query CommentsSince($ids: [ID!]!, $since: DateTimeOrDuration!, $after: String) {
+  comments(first: 100, after: $after, filter: { issue: { id: { in: $ids } }, createdAt: { gt: $since } }) {
+    nodes { id createdAt user { name isMe } botActor { name } issue { id } }
+    pageInfo { hasNextPage endCursor }
+  }
+}`
+
+// CommentsSince returns the comments created after since on the given issues (Linear
+// UUIDs), oldest first.
+func (c *Client) CommentsSince(ctx context.Context, issueIDs []string, since time.Time) ([]Comment, error) {
+	if len(issueIDs) == 0 {
+		return nil, nil
+	}
+	var all []Comment
+	var after *string
+	for {
+		vars := map[string]any{"ids": issueIDs, "since": since.UTC().Format(time.RFC3339Nano)}
+		if after != nil {
+			vars["after"] = *after
+		}
+		var data struct {
+			Comments struct {
+				Nodes []struct {
+					ID        string    `json:"id"`
+					CreatedAt time.Time `json:"createdAt"`
+					User      *struct {
+						Name string `json:"name"`
+						IsMe bool   `json:"isMe"`
+					} `json:"user"`
+					BotActor *struct {
+						Name string `json:"name"`
+					} `json:"botActor"`
+					Issue *struct {
+						ID string `json:"id"`
+					} `json:"issue"`
+				} `json:"nodes"`
+				PageInfo struct {
+					HasNextPage bool   `json:"hasNextPage"`
+					EndCursor   string `json:"endCursor"`
+				} `json:"pageInfo"`
+			} `json:"comments"`
+		}
+		if err := c.do(ctx, commentsSinceQuery, vars, &data); err != nil {
+			return nil, err
+		}
+		for _, n := range data.Comments.Nodes {
+			if n.Issue == nil {
+				continue
+			}
+			cm := Comment{ID: n.ID, IssueID: n.Issue.ID, CreatedAt: n.CreatedAt}
+			switch {
+			case n.User != nil:
+				cm.Author, cm.IsMe = n.User.Name, n.User.IsMe
+			case n.BotActor != nil:
+				cm.Author = n.BotActor.Name
+			}
+			all = append(all, cm)
+		}
+		if !data.Comments.PageInfo.HasNextPage {
+			break
+		}
+		cursor := data.Comments.PageInfo.EndCursor
+		after = &cursor
+	}
+	sort.Slice(all, func(a, b int) bool { return all[a].CreatedAt.Before(all[b].CreatedAt) })
+	return all, nil
 }
 
 const issueByIdentifierQuery = `query IssueByIdentifier($id: String!) {

@@ -37,6 +37,8 @@ type InstanceData struct {
 	Archived   bool      `json:"archived,omitempty"`
 	ArchivedAt time.Time `json:"archived_at,omitempty"`
 	InView     bool      `json:"in_view,omitempty"`
+
+	LinearSeenAt time.Time `json:"linear_seen_at,omitempty"`
 }
 
 // GitWorktreeData represents the serializable data of a GitWorktree

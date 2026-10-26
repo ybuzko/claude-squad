@@ -102,6 +102,8 @@ func (m *home) restoreTicket(inst *session.Instance, prompt string) tea.Cmd {
 	inst.Archived = false
 	inst.ArchivedAt = time.Time{}
 	inst.Restoring = true
+	// The resume prompt has it re-read the ticket, comments included.
+	inst.LinearSeenAt = time.Now()
 	m.list.AddInstance(inst)()
 
 	// The old status file describes the previous run; its absence until SessionStart

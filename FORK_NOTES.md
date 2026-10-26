@@ -141,6 +141,35 @@ with their full context.
   if `cleanupPeriodDays` in `~/.claude/settings.json` is large (default 30 days).
 - Archived branches exist only in `spawn.repo_path`; deleting branches there loses them.
 
+## Ticket updates (`linear.watch_updates`)
+
+New comments by other people on an active ticket are handed to its session, so an
+answer to something the agent asked for gets acted on before the next human touch
+(`app/updates.go`).
+
+- Each poll also asks Linear for comments on the active (non-archived) ticket sessions
+  created after their `linear_seen_at` (one query, capped at 14 days back). Comments by
+  the API key's own user are skipped: they are the user's or an agent's posting as the
+  user, and the two look the same.
+- `linear_seen_at` is persisted per instance. It starts at spawn/restore time (triage
+  and the resume prompt read every comment so far), and at the first poll for sessions
+  that predate the feature, so turning it on does not replay history.
+- **Idle session:** `linear.update_prompt` is typed in once the hook status accepts a
+  prompt (`idle`, not a permission or question dialog) and Claude's input box is empty
+  (`tmux.inputBoxEmpty`: nothing after `❯` except the dimmed suggestion). Busy sessions
+  wait; anything that piles up goes in as one prompt. Nothing is delivered while you are
+  attached, because the UI loop is blocked then.
+- **Paused session:** resumed, then the prompt is typed in once `SessionStart` reports
+  (same path as archive restores). Archived sessions are not watched.
+- The prompt lists authors and times only; the agent reads the comments from Linear
+  itself and is told to treat them as information, not instructions or approval, and to
+  stage and dry-run but not apply writes, post or merge.
+- A row gets 💬 when an update went in; it clears when the session is opened.
+
+Every Claude session cs launches also gets `--append-system-prompt` with `recap_prompt`
+(a final "TL;DR:" line each turn, for skimming previews); `"recap_prompt": "off"` turns
+it off. It only reaches sessions launched or resumed after the change.
+
 ## Status contract (Claude Code hooks → TUI)
 
 `cs hook` is installed as a Claude Code hook (see `hooks/claude-settings.snippet.json`).
@@ -173,7 +202,9 @@ File: `~/.claude-squad/status/<ISSUE-ID>.json`
     "poll_interval_sec": 15,
     "max_concurrent": 5,
     "done_state_types": ["completed", "canceled"],
-    "done_state_ids": []
+    "done_state_ids": [],
+    "watch_updates": true,
+    "update_prompt": "New comments on {ISSUE_ID} in Linear since you last checked: {UPDATES}. …"
   },
   "spawn": {
     "program": "claude \"/triage-linear-ticket {ISSUE_ID}\"",
@@ -182,7 +213,8 @@ File: `~/.claude-squad/status/<ISSUE-ID>.json`
     "setup_command": "pnpm install --frozen-lockfile",
     "resume_prompt": "{ISSUE_ID} is back in your queue (reopened or requested again). …"
   },
-  "instance_limit": 20
+  "instance_limit": 50,
+  "recap_prompt": "… End every turn with a final line that starts with \"TL;DR:\" …"
 }
 ```
 

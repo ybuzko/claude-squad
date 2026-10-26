@@ -141,6 +141,7 @@ func newHome(ctx context.Context, program string, autoYes bool, forceLinear bool
 	if forceLinear {
 		appConfig.Linear.Enabled = true
 	}
+	session.SetAppendedSystemPrompt(appConfig.AppendedSystemPrompt())
 
 	dispatcher, err := newDispatcher(appConfig)
 	if err != nil {
@@ -407,6 +408,8 @@ func (m *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleTicketRestored(msg)
 	case resumePromptMsg:
 		return m, m.handleResumePrompt(msg)
+	case ticketUpdateSentMsg:
+		return m, m.handleTicketUpdateSent(msg)
 	case archivedDeletedMsg:
 		if msg.err != nil {
 			return m, m.handleError(fmt.Errorf("deleting %s: %w", msg.title, msg.err))
@@ -1079,6 +1082,8 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			})
 			return m, nil
 		}
+		// Opening the session is the human touch the update marker waits for.
+		selected.LinearUpdateAt = time.Time{}
 		// Show help screen before attaching
 		m.showHelpScreen(helpTypeInstanceAttach{}, func() {
 			ch, err := m.list.Attach()

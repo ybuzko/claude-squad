@@ -34,6 +34,15 @@ type Status struct {
 	TS        int64  `json:"ts"`
 	Reason    string `json:"reason,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
+	// Notification is Claude Code's notification_type for a blocked state, e.g.
+	// "permission_prompt", or "idle_prompt" when it is only waiting for the next prompt.
+	Notification string `json:"notification,omitempty"`
+}
+
+// AcceptsPrompt reports whether Claude Code is waiting at its input box, so text
+// typed into the session lands as a new prompt rather than an answer to a dialog.
+func (s *Status) AcceptsPrompt() bool {
+	return s.State == StateIdle || s.State == StateBlocked && s.Notification == "idle_prompt"
 }
 
 func Dir() (string, error) {
@@ -155,6 +164,7 @@ func HandleHook(stdin io.Reader, issueID string, now time.Time) error {
 	case "Notification":
 		next.State = StateBlocked
 		next.Reason = in.Message
+		next.Notification = in.NotificationType
 	case "SessionStart":
 		switch in.Source {
 		case "startup":

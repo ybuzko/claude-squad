@@ -75,6 +75,13 @@ type Instance struct {
 	// ClaudeSessionID is the Claude Code session id reported by the SessionStart hook,
 	// used to resume the conversation after the tmux session dies.
 	ClaudeSessionID string
+	// LinearSeenAt is the creation time of the newest ticket comment this session has
+	// been told about (or the time it started reading the ticket). Later comments by
+	// others are delivered to it as an update.
+	LinearSeenAt time.Time
+	// LinearUpdateAt is when new ticket comments were last delivered to the session; the
+	// list marks the row until the session is opened (not persisted).
+	LinearUpdateAt time.Time
 	// HookReason is the human-readable reason from the last hook status (not persisted).
 	HookReason string
 	// SetupCommand runs in the worktree whenever it is (re)created, before the program.
@@ -141,6 +148,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		Archived:        i.Archived,
 		ArchivedAt:      i.ArchivedAt,
 		InView:          i.InView,
+		LinearSeenAt:    i.LinearSeenAt,
 	}
 
 	// Only include worktree data if gitWorktree is initialized
@@ -190,6 +198,7 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		IssueState:      data.IssueState,
 		Archived:        data.Archived,
 		ArchivedAt:      data.ArchivedAt,
+		LinearSeenAt:    data.LinearSeenAt,
 		InView:          data.InView,
 
 		gitWorktree: git.NewGitWorktreeFromStorage(
@@ -287,31 +296,54 @@ func (i *Instance) IsTicket() bool {
 // newTmuxSession builds the tmux session for this instance. Ticket instances export
 // CS_ISSUE_ID so Claude Code hooks can report status for them.
 func (i *Instance) newTmuxSession() *tmux.TmuxSession {
-	s := tmux.NewTmuxSession(i.Title, i.withRemoteControl(i.Program))
+	s := tmux.NewTmuxSession(i.Title, i.launchCommand(i.Program))
 	if i.IsTicket() {
 		s.SetEnv(map[string]string{"CS_ISSUE_ID": i.IssueID})
 	}
 	return s
 }
 
-// withRemoteControl adds `--remote-control=<name>` to a Claude Code command, so the
-// session can also be reached from claude.ai and the Claude app. Other programs, and
-// commands that already set the flag, are returned unchanged.
-func (i *Instance) withRemoteControl(program string) string {
+// appendedSystemPrompt is added to the system prompt of every Claude Code session cs
+// launches (see SetAppendedSystemPrompt).
+var appendedSystemPrompt string
+
+// SetAppendedSystemPrompt sets the text passed with --append-system-prompt to the
+// Claude Code sessions cs launches from now on; "" passes nothing.
+func SetAppendedSystemPrompt(prompt string) {
+	appendedSystemPrompt = prompt
+}
+
+// launchCommand adds cs's flags to a Claude Code command, right after the binary:
+// `--remote-control=<name>`, so the session can also be reached from claude.ai and
+// the Claude app, and `--append-system-prompt`. Other programs, and flags the command
+// already sets, are left alone.
+func (i *Instance) launchCommand(program string) string {
 	program = strings.TrimSpace(program)
 	if tmux.BaseProgram(program) != tmux.ProgramClaude {
 		return program
 	}
-	for _, f := range strings.Fields(program) {
-		if f == "--rc" || strings.HasPrefix(f, "--remote-control") || strings.HasPrefix(f, "--rc=") {
-			return program
+	hasFlag := func(names ...string) bool {
+		for _, f := range strings.Fields(program) {
+			for _, n := range names {
+				if f == n || strings.HasPrefix(f, n+"=") {
+					return true
+				}
+			}
 		}
+		return false
+	}
+	var flags string
+	if !hasFlag("--remote-control", "--rc") {
+		flags += " --remote-control=" + shellQuote(i.remoteControlName())
+	}
+	if appendedSystemPrompt != "" && !hasFlag("--append-system-prompt", "--append-system-prompt-file") {
+		flags += " --append-system-prompt " + shellQuote(appendedSystemPrompt)
 	}
 	end := strings.IndexAny(program, " \t")
 	if end < 0 {
 		end = len(program)
 	}
-	return program[:end] + " --remote-control=" + shellQuote(i.remoteControlName()) + program[end:]
+	return program[:end] + flags + program[end:]
 }
 
 // remoteControlName is the name the session shows under in the Claude app:
@@ -881,7 +913,7 @@ func (i *Instance) Resume() error {
 
 	// A fresh tmux session for a ticket should continue the Claude Code conversation
 	// rather than re-run the initial triage prompt.
-	i.tmuxSession.SetProgram(i.withRemoteControl(i.ResumeProgram()))
+	i.tmuxSession.SetProgram(i.launchCommand(i.ResumeProgram()))
 
 	// Check if tmux session still exists from pause, otherwise create new one
 	if i.tmuxSession.DoesSessionExist() {
@@ -992,6 +1024,14 @@ func (i *Instance) SendPrompt(prompt string) error {
 	}
 
 	return nil
+}
+
+// InputBoxEmpty reports whether Claude Code's input box holds no typed text.
+func (i *Instance) InputBoxEmpty() (bool, error) {
+	if !i.started || i.tmuxSession == nil {
+		return false, fmt.Errorf("instance not started")
+	}
+	return i.tmuxSession.InputBoxEmpty()
 }
 
 // ForwardScroll scrolls the program running in the session (see
