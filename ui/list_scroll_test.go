@@ -133,3 +133,44 @@ func TestFirstAndLast(t *testing.T) {
 	empty.First()
 	assert.Nil(t, empty.GetSelectedInstance())
 }
+
+func TestScrollByMovesWindowNotSelection(t *testing.T) {
+	l := newScrollList(12, 40, 20) // 7 items per page
+	_ = l.String()
+
+	l.ScrollBy(3)
+	out := ansi.Strip(l.String())
+	assert.Equal(t, "TSA-100", l.GetSelectedInstance().Title)
+	assert.NotContains(t, out, "TSA-100")
+	assert.Contains(t, out, "TSA-103")
+	assert.Contains(t, out, "TSA-109")
+	assert.Contains(t, out, "↑ 3 more")
+	// A click lands on what is drawn: the first row after the hint is TSA-103.
+	idx, ok := l.ItemAtRow(listHeaderLines + 1)
+	require.True(t, ok)
+	assert.Equal(t, 3, idx)
+
+	// Ticks past the end are not stored up: one tick back moves the window.
+	l.ScrollBy(100)
+	_ = l.String()
+	l.ScrollBy(-1)
+	out = ansi.Strip(l.String())
+	assert.Contains(t, out, "TSA-104")
+	assert.Contains(t, out, "↓ 1 more")
+
+	// Choosing another item brings the window back to follow the selection.
+	l.Down()
+	out = ansi.Strip(l.String())
+	assert.Contains(t, out, "TSA-101")
+	assert.Contains(t, out, "↑ 1 more")
+}
+
+func TestScrollBySurvivesResort(t *testing.T) {
+	l := newScrollList(12, 40, 20)
+	_ = l.String()
+	l.ScrollBy(4)
+	l.items[11].Status = session.Blocked // re-sorts to the top
+	l.SortByUrgency()
+	out := ansi.Strip(l.String())
+	assert.Contains(t, out, "↑ 4 more")
+}

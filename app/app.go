@@ -85,8 +85,9 @@ type home struct {
 	resizeSeq int
 	// ss3Pending is set after an alt+O key, the first half of an SS3 sequence.
 	ss3Pending bool
-	// listWidth is the width of the session list column, for mapping mouse clicks.
-	listWidth int
+	// listWidth is the width of the session list column and contentHeight the height
+	// of the list and preview panes, for mapping mouse events.
+	listWidth, contentHeight int
 	// repaintPending asks for a full repaint after the next update: set when returning
 	// from an attached session, whose tmux client drew over the screen.
 	repaintPending bool
@@ -228,6 +229,7 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 		menuHeight = 1
 		contentHeight = msg.Height - menuHeight - 2
 	}
+	m.contentHeight = contentHeight
 	m.errBox.SetSize(int(float32(width)*0.9), 1) // error box takes 1 row
 
 	m.tabbedWindow.SetSize(tabsWidth, contentHeight)
@@ -438,20 +440,30 @@ func (m *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		// Handle mouse wheel events for scrolling the diff/preview pane
-		if msg.Action == tea.MouseActionPress {
-			if msg.Button == tea.MouseButtonWheelDown || msg.Button == tea.MouseButtonWheelUp {
-				selected := m.list.GetSelectedInstance()
-				if selected == nil || selected.Status == session.Paused {
-					return m, nil
+		// The wheel scrolls the pane under the pointer: the session list (without
+		// changing the selection) or the preview/diff pane. Both start one row below
+		// the top of the frame; ticks over the menu and error rows are ignored.
+		if msg.Action == tea.MouseActionPress &&
+			(msg.Button == tea.MouseButtonWheelDown || msg.Button == tea.MouseButtonWheelUp) &&
+			msg.Y >= 1 && msg.Y <= m.contentHeight {
+			delta := 1
+			if msg.Button == tea.MouseButtonWheelUp {
+				delta = -1
+			}
+			if msg.X < m.listWidth {
+				if m.state == stateDefault {
+					m.activeList().ScrollBy(delta)
 				}
-
-				switch msg.Button {
-				case tea.MouseButtonWheelUp:
-					m.tabbedWindow.ScrollUp()
-				case tea.MouseButtonWheelDown:
-					m.tabbedWindow.ScrollDown()
-				}
+				return m, nil
+			}
+			selected := m.activeList().GetSelectedInstance()
+			if selected == nil || selected.Status == session.Paused {
+				return m, nil
+			}
+			if delta < 0 {
+				m.tabbedWindow.ScrollUp()
+			} else {
+				m.tabbedWindow.ScrollDown()
 			}
 		}
 		return m, nil

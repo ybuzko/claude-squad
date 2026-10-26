@@ -82,8 +82,13 @@ type List struct {
 	items       []*session.Instance
 	selectedIdx int
 	// offset is the index of the first item shown when the list is taller than its
-	// viewport. String keeps the selected item inside the visible window.
+	// viewport. String keeps the selected item inside the visible window, except
+	// while the list is scrolled by hand (see ScrollBy).
 	offset int
+	// scrolledFrom is the selected item when ScrollBy last moved the window. While it
+	// is still the selection the window stays where it was scrolled to; selecting
+	// anything else brings the window back to follow the selection.
+	scrolledFrom *session.Instance
 	// shownStart and shownEnd are the items the last String drew ([start, end)), and
 	// shownTop the row the first of them starts on; ItemAtRow maps clicks with them.
 	shownStart, shownEnd, shownTop int
@@ -557,11 +562,14 @@ func (l *List) visibleRange(avail int) (start, end int) {
 	if perPage < 1 {
 		perPage = 1
 	}
-	if l.selectedIdx < l.offset {
-		l.offset = l.selectedIdx
-	}
-	if l.selectedIdx >= l.offset+perPage {
-		l.offset = l.selectedIdx - perPage + 1
+	if l.scrolledFrom == nil || l.scrolledFrom != l.GetSelectedInstance() {
+		l.scrolledFrom = nil
+		if l.selectedIdx < l.offset {
+			l.offset = l.selectedIdx
+		}
+		if l.selectedIdx >= l.offset+perPage {
+			l.offset = l.selectedIdx - perPage + 1
+		}
 	}
 	if l.offset > n-perPage {
 		l.offset = n - perPage
@@ -570,6 +578,18 @@ func (l *List) visibleRange(avail int) (start, end int) {
 		l.offset = 0
 	}
 	return l.offset, l.offset + perPage
+}
+
+// ScrollBy moves the visible window by delta items without changing the selection,
+// so the selected item may scroll out of view.
+func (l *List) ScrollBy(delta int) {
+	if len(l.items) == 0 {
+		return
+	}
+	l.scrolledFrom = l.GetSelectedInstance()
+	// Clamp to the last drawn page size, so ticks past the end are not stored up.
+	maxOffset := len(l.items) - (l.shownEnd - l.shownStart)
+	l.offset = min(max(l.offset+delta, 0), max(maxOffset, 0))
 }
 
 // Down selects the next item in the list.
