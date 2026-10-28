@@ -265,7 +265,7 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 		descS = listDescStyle
 	}
 
-	// add spinner next to title if it's running (or being restored from the archive)
+	// add spinner next to title if it's running (or being resumed)
 	join := r.statusGlyph(i, titleS.GetBackground())
 	if i.Restoring {
 		join = fmt.Sprintf("%s ", r.spinner.View())

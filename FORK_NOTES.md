@@ -20,7 +20,7 @@ Where the fork hooks in. Keep this table current when rebasing.
 | Status heuristic | `session/tmux/tmux.go` `HasUpdated()` — sha256 of `capture-pane`; changed → `Running`, else `Ready` | unchanged; used only for instances without a status file |
 | tmux session | `tmux new-session -d -s claudesquad_<title> -c <worktree> <program>` | `-e CS_ISSUE_ID=<id>` added for ticket instances; Claude commands get `--remote-control=<name>` (`Instance.withRemoteControl`: "TSA-196 <ticket title>" for tickets, the title otherwise), on first start and on resume, so every session shows up in claude.ai and the Claude app |
 | Worktree + branch | `session/git/worktree.go`: branch = `BranchPrefix + title` (lowercased by `sanitizeBranchName`), path `~/.claude-squad/worktrees/<branch>_<hex>`, base = `HEAD` of repo | `NewGitWorktreeForBranch(...)` takes an explicit branch + base ref (`origin/main`, fetched first) |
-| Pause / Resume / Kill | `Instance.Pause()` keeps branch + path; `Resume()` restarts tmux with the same `Program`; `Kill()` drops worktree **and** branch | ticket instances: `D` archives (`StopForArchive` = `Pause` + kill tmux); permanent delete (`Kill`) only from the archive view; `Resume()` uses `claude --resume <session>` / `claude -c`, or the original program when Claude never stored a conversation for the worktree (`claude -c` would exit at once and end the tmux session) |
+| Pause / Resume / Kill | `Instance.Pause()` keeps branch + path; `Resume()` restarts tmux with the same `Program`; `Kill()` drops worktree **and** branch | the `c` (checkout = pause) key is removed: it deleted the worktree while leaving the program running in it; `r` resumes in the background (`resumeInBackground`), and every pause, resume, archive and restore is logged with what triggered it; ticket instances: `D` archives (`StopForArchive` = `Pause` + kill tmux); permanent delete (`Kill`) only from the archive view; `Resume()` uses `claude --resume <session>` / `claude -c`, or the original program when Claude never stored a conversation for the worktree (`claude -c` would exit at once and end the tmux session) |
 | Config | `config/config.go`, `~/.claude-squad/config.json`, `cs debug` | `linear`, `spawn`, `instance_limit` sections |
 | List rendering | `ui/list.go` `List.items` (user-ordered via J/K), `InstanceRenderer.Render` glyph by status, header `" Instances "` | urgency sort (blocked → idle → running → paused → done; idle sessions most recently idle first, by `StatusChangedAt`, taken from the hook timestamp for ticket sessions), header counts; `home`/`end` jump to first/last; compact two-line rows (ticket rows: `TSA-123 · <Linear state> (due 10/5)` over the ticket title, refreshed every poll, states containing "blocked" in red; other rows keep the branch); a left click selects a session (`List.ItemAtRow`), scrolled window that follows the selection with `↑/↓ N more` hints (upstream overflowed the viewport); the mouse wheel scrolls whichever pane is under the pointer, and over the list it moves the window without changing the selection (`List.ScrollBy`) until another session is selected (upstream's wheel always scrolled the preview) |
 | Trust prompt | `Instance.CheckAndHandleTrustPrompt()` exists upstream but is never called | called on a backoff (1–21 s) after auto-spawn; moves the selection to "Yes, I trust this folder" before confirming, since current Claude Code defaults to "No, exit" |
@@ -78,6 +78,22 @@ is on the alternate one, so after moving the window to another monitor every att
 (and the overview after it) came back at the old size, wrapped and garbled until a
 resize, even though the size WSL reported was right.
 
+Opening a session does not block the TUI. Upstream ran the attach inside Update and
+waited there for the detach, so polling, spawning and the comment watcher stopped while
+a session was open, and Bubble Tea's own stdin reader kept running: it took one chunk of
+input, which the session never got and the list received as a keypress after the detach
+(a lone `c` from the terminal's reply to tmux's startup queries is the likely cause of a
+session paused mid-work). `termio` now owns the terminal: it puts it in raw mode, reads
+stdin on one goroutine and passes each chunk to Bubble Tea through a pipe
+(`tea.WithInput`) or, while a session is open, to that session (`termio.Divert`). The
+TUI's output goes through `termio.Output`, which drops writes while a session is open,
+so the event loop keeps running without drawing over it; the detach forces a full
+repaint. `TmuxSession.attached` makes the TUI leave the open client alone (`SendKeys`
+returns `ErrAttached`, `SetDetachedSize` only records the size), and the poller and the
+comment watcher skip a session that is open (`Instance.Attached`). The detach no longer
+waits for the attached client's output copier, whose read on the closed PTY can take
+seconds to return; the copier's writer is stopped instead.
+
 Dead code upstream worth knowing: `instanceStartDoneMsg` / `runInstanceStartCmd`
 in `app/app.go` are unused; `instanceStartedMsg` is the live path.
 
@@ -108,7 +124,8 @@ batch of spawns all hit the dialog, which the auto-dismiss answers.
 | `t` | Prompt for an issue id (any ticket, in the view or not) and spawn it like the poller would. An archived ticket is restored instead, with `spawn.resume_prompt` |
 | `D` | On a ticket session (any state): **archive** it. Plain `n`/`N` sessions keep upstream kill |
 | `a` | Toggle the archive view. There: `r` restores (no prompt), `D` deletes for good, `a`/`esc` goes back |
-| `r` | Resume a paused session (e.g. after its tmux server died) |
+| `r` | Resume a paused session (e.g. after its tmux server died), in the background |
+| `c` | Removed (upstream checkout/pause) |
 | `n` / `N` | Unchanged — plain sessions for non-ticket work, created from `spawn.repo_path` |
 
 ## Archive
@@ -157,8 +174,8 @@ answer to something the agent asked for gets acted on before the next human touc
 - **Idle session:** `linear.update_prompt` is typed in once the hook status accepts a
   prompt (`idle`, not a permission or question dialog) and Claude's input box is empty
   (`tmux.inputBoxEmpty`: nothing after `❯` except the dimmed suggestion). Busy sessions
-  wait; anything that piles up goes in as one prompt. Nothing is delivered while you are
-  attached, because the UI loop is blocked then.
+  wait; anything that piles up goes in as one prompt. Nothing is delivered to a session
+  while you have it open.
 - **Paused session:** resumed, then the prompt is typed in once `SessionStart` reports
   (same path as archive restores). Archived sessions are not watched.
 - The prompt lists authors and times only; the agent reads the comments from Linear

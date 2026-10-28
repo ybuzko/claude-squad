@@ -27,8 +27,6 @@ type helpTypeInstanceStart struct {
 
 type helpTypeInstanceAttach struct{}
 
-type helpTypeInstanceCheckout struct{}
-
 func helpStart(instance *session.Instance) helpText {
 	return helpTypeInstanceStart{instance: instance}
 }
@@ -53,7 +51,6 @@ func (h helpTypeGeneral) toContent() string {
 		"",
 		headerStyle.Render("Handoff:"),
 		keyStyle.Render("p")+descStyle.Render("         - Commit and push branch to github"),
-		keyStyle.Render("c")+descStyle.Render("         - Checkout: commit changes and pause session"),
 		keyStyle.Render("r")+descStyle.Render("         - Resume a paused session"),
 		"",
 		headerStyle.Render("Other:"),
@@ -81,7 +78,6 @@ func (h helpTypeInstanceStart) toContent() string {
 		keyStyle.Render("D")+descStyle.Render("     - Kill (delete) the selected session"),
 		"",
 		headerStyle.Render("Handoff:"),
-		keyStyle.Render("c")+descStyle.Render("     - Checkout this instance's branch"),
 		keyStyle.Render("p")+descStyle.Render("     - Push branch to GitHub to create a PR"),
 	)
 	return content
@@ -96,20 +92,6 @@ func (h helpTypeInstanceAttach) toContent() string {
 	return content
 }
 
-func (h helpTypeInstanceCheckout) toContent() string {
-	content := lipgloss.JoinVertical(lipgloss.Left,
-		titleStyle.Render("Checkout Instance"),
-		"",
-		"Changes will be committed locally. The branch name has been copied to your clipboard for you to checkout.",
-		"",
-		"Feel free to make changes to the branch and commit them. When resuming, the session will continue from where you left off.",
-		"",
-		headerStyle.Render("Commands:"),
-		keyStyle.Render("c")+descStyle.Render(" - Checkout: commit changes locally and pause session"),
-		keyStyle.Render("r")+descStyle.Render(" - Resume a paused session"),
-	)
-	return content
-}
 func (h helpTypeGeneral) mask() uint32 {
 	return 1
 }
@@ -119,9 +101,6 @@ func (h helpTypeInstanceStart) mask() uint32 {
 }
 func (h helpTypeInstanceAttach) mask() uint32 {
 	return 1 << 2
-}
-func (h helpTypeInstanceCheckout) mask() uint32 {
-	return 1 << 3
 }
 
 var (

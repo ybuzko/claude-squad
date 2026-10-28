@@ -80,17 +80,18 @@ func (m *home) deliverTicketUpdates(comments []linear.Comment) []tea.Cmd {
 				news = append(news, c)
 			}
 		}
-		if len(news) == 0 || d.delivering[inst] || inst.Restoring || inst.Status == session.Loading {
+		// A session open in the terminal waits: the user is in it.
+		if len(news) == 0 || d.delivering[inst] || inst.Restoring || inst.Status == session.Loading ||
+			inst.Attached() {
 			continue
 		}
 		prompt := m.updatePrompt(inst.IssueID, news)
 		seen := news[len(news)-1].CreatedAt
 		if inst.Paused() {
-			log.InfoLog.Printf("%s: %d new comment(s) on the ticket; resuming the session", inst.Title, len(news))
 			inst.LinearSeenAt = seen
 			inst.LinearUpdateAt = time.Now()
 			persist = true
-			cmds = append(cmds, m.resumeWithPrompt(inst, prompt))
+			cmds = append(cmds, m.resumeInBackground(inst, prompt, fmt.Sprintf("%d new Linear comment(s)", len(news))))
 			continue
 		}
 		if !acceptsPrompt(inst) {
@@ -158,17 +159,4 @@ func (m *home) updatePrompt(issueID string, news []linear.Comment) string {
 	}
 	r := strings.NewReplacer("{ISSUE_ID}", issueID, "{UPDATES}", strings.Join(parts, ", "))
 	return r.Replace(m.dispatcher.cfg.Linear.UpdatePrompt)
-}
-
-// resumeWithPrompt resumes a paused session in the background, then sends prompt once
-// Claude Code is up (see handleResumePrompt).
-func (m *home) resumeWithPrompt(inst *session.Instance, prompt string) tea.Cmd {
-	inst.Restoring = true
-	// The status file's reappearance is how handleResumePrompt knows Claude is up.
-	if err := status.Remove(inst.IssueID); err != nil {
-		log.WarningLog.Printf("could not remove stale status for %s: %v", inst.IssueID, err)
-	}
-	return func() tea.Msg {
-		return ticketRestoredMsg{instance: inst, prompt: prompt, err: inst.Resume()}
-	}
 }

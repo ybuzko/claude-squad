@@ -612,12 +612,18 @@ func (i *Instance) CheckAndHandleTrustPrompt() bool {
 
 // TapEnter sends an enter key press to the tmux session if AutoYes is enabled.
 func (i *Instance) TapEnter() {
-	if !i.started || !i.AutoYes {
+	if !i.started || !i.AutoYes || i.Attached() {
 		return
 	}
 	if err := i.tmuxSession.TapEnter(); err != nil {
 		log.ErrorLog.Printf("error tapping enter: %v", err)
 	}
+}
+
+// Attached reports whether the session is open in the terminal. The TUI keeps running
+// meanwhile, so automatic actions (archiving, sending prompts) skip such a session.
+func (i *Instance) Attached() bool {
+	return i.started && i.tmuxSession != nil && i.tmuxSession.Attached()
 }
 
 func (i *Instance) Attach() (chan struct{}, error) {

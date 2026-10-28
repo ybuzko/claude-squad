@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"claude-squad/cmd"
 	"claude-squad/log"
+	"claude-squad/termio"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -60,6 +61,16 @@ type TmuxSession struct {
 	//
 	// Channel to be closed at the very end of detaching. Used to signal callers.
 	attachCh chan struct{}
+	// undivert hands terminal input back to the TUI; set while attached.
+	undivert func()
+	// attachOut carries the attached client's output to the terminal until detach.
+	attachOut *stoppableWriter
+	// attached is true while the terminal shows this session. The TUI keeps running
+	// meanwhile, so calls from it that would write to t.ptmx (now the attached client)
+	// are refused or deferred; mu guards ptmx and attached against Detach, which runs
+	// on the input goroutine.
+	attached bool
+	mu       sync.Mutex
 	// While attached, we use some goroutines to manage the window size and stdin/stdout. This stuff
 	// is used to terminate them on Detach. We don't want them to outlive the attached window.
 	ctx    context.Context
@@ -438,10 +449,33 @@ func (m *statusMonitor) hash(s string) []byte {
 	return h.Sum(nil)
 }
 
+// ErrAttached is returned for input sent by cs to a session the user has open.
+var ErrAttached = errors.New("session is open in the terminal")
+
+// Attached reports whether the terminal currently shows this session.
+func (t *TmuxSession) Attached() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.attached
+}
+
+// writeInput types into the session through the background client.
+func (t *TmuxSession) writeInput(b []byte) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.attached {
+		return ErrAttached
+	}
+	if t.ptmx == nil {
+		return ErrSessionNotFound
+	}
+	_, err := t.ptmx.Write(b)
+	return err
+}
+
 // TapEnter sends an enter keystroke to the tmux pane.
 func (t *TmuxSession) TapEnter() error {
-	_, err := t.ptmx.Write([]byte{0x0D})
-	if err != nil {
+	if err := t.writeInput([]byte{0x0D}); err != nil {
 		return fmt.Errorf("error sending enter keystroke to PTY: %w", err)
 	}
 	return nil
@@ -449,16 +483,14 @@ func (t *TmuxSession) TapEnter() error {
 
 // TapDAndEnter sends 'D' followed by an enter keystroke to the tmux pane.
 func (t *TmuxSession) TapDAndEnter() error {
-	_, err := t.ptmx.Write([]byte{0x44, 0x0D})
-	if err != nil {
+	if err := t.writeInput([]byte{0x44, 0x0D}); err != nil {
 		return fmt.Errorf("error sending enter keystroke to PTY: %w", err)
 	}
 	return nil
 }
 
 func (t *TmuxSession) SendKeys(keys string) error {
-	_, err := t.ptmx.Write([]byte(keys))
-	return err
+	return t.writeInput([]byte(keys))
 }
 
 // HasUpdated checks if the tmux pane content has changed since the last tick. It also returns true if
@@ -487,80 +519,72 @@ func (t *TmuxSession) HasUpdated() (updated bool, hasPrompt bool) {
 }
 
 func (t *TmuxSession) Attach() (chan struct{}, error) {
+	// From here on the TUI must not type into or resize t.ptmx: it is the client the
+	// terminal shows. Calls made meanwhile see attached and back off.
+	t.mu.Lock()
 	if cols, rows, err := term.GetSize(int(os.Stdin.Fd())); err == nil {
 		if err := t.freshClient(cols, rows); err != nil {
+			t.mu.Unlock()
 			return nil, err
 		}
 	}
-	t.attachCh = make(chan struct{})
+	t.attached = true
+	ptmx := t.ptmx
+	t.mu.Unlock()
 
+	t.attachCh = make(chan struct{})
 	t.wg = &sync.WaitGroup{}
-	t.wg.Add(1)
 	t.ctx, t.cancel = context.WithCancel(context.Background())
 
-	// The first goroutine should terminate when the ptmx is closed. We use the
-	// waitgroup to wait for it to finish.
-	// The 2nd one returns when you press escape to Detach. It doesn't need to be
-	// in the waitgroup because is the goroutine doing the Detaching; it waits for
-	// all the other ones.
+	// The terminal answers the queries a new tmux client sends (device attributes,
+	// colours: "[?62c", "]10;rgb:f8f8f8", ...), and the answers arrive as input right
+	// after attaching. Anything within the first 50ms is taken to be such an answer
+	// and dropped rather than typed into the session.
+	start := time.Now()
+	undivert, err := termio.Divert(func(b []byte) {
+		if time.Since(start) < 50*time.Millisecond {
+			log.InfoLog.Printf("nuked first stdin: %s", b)
+			return
+		}
+		// Ctrl+Q leaves the session.
+		if len(b) == 1 && b[0] == 17 {
+			t.Detach()
+			return
+		}
+		_, _ = ptmx.Write(b)
+	})
+	if err != nil {
+		t.cancel()
+		t.cancel, t.ctx, t.wg = nil, nil, nil
+		t.attachCh = nil
+		t.mu.Lock()
+		t.attached = false
+		t.mu.Unlock()
+		return nil, err
+	}
+	t.mu.Lock()
+	t.undivert = undivert
+	t.mu.Unlock()
+
+	// The output copier ends some time after the ptmx is closed: a read blocked on a
+	// closed PTY can take seconds to return. Detach does not wait for it; it stops the
+	// copier's writer instead, so nothing the old client prints lands on the TUI.
+	// Input reaches the session through the divert function above.
+	ctx := t.ctx
+	out := &stoppableWriter{w: newAltScreenFilter(os.Stdout)}
+	t.attachOut = out
 	go func() {
-		defer t.wg.Done()
-		_, _ = io.Copy(newAltScreenFilter(os.Stdout), t.ptmx)
+		_, _ = io.Copy(out, ptmx)
 		// When io.Copy returns, it means the connection was closed
 		// This could be due to normal detach or Ctrl-D
 		// Check if the context is done to determine if it was a normal detach
 		select {
-		case <-t.ctx.Done():
+		case <-ctx.Done():
 			// Normal detach, do nothing
 		default:
 			// If context is not done, it was likely an abnormal termination (Ctrl-D)
 			// Print warning message
 			fmt.Fprintf(os.Stderr, "\n\033[31mError: Session terminated without detaching. Use Ctrl-Q to properly detach from tmux sessions.\033[0m\n")
-		}
-	}()
-
-	go func() {
-		// Close the channel after 50ms
-		timeoutCh := make(chan struct{})
-		go func() {
-			time.Sleep(50 * time.Millisecond)
-			close(timeoutCh)
-		}()
-
-		// Read input from stdin and check for Ctrl+q
-		buf := make([]byte, 32)
-		for {
-			nr, err := os.Stdin.Read(buf)
-			if err != nil {
-				if err == io.EOF {
-					break
-				}
-				continue
-			}
-
-			// Nuke the first bytes of stdin, up to 64, to prevent tmux from reading it.
-			// When we attach, there tends to be terminal control sequences like ?[?62c0;95;0c or
-			// ]10;rgb:f8f8f8. The control sequences depend on the terminal (warp vs iterm). We should use regex ideally
-			// but this works well for now. Log this for debugging.
-			//
-			// There seems to always be control characters, but I think it's possible for there not to be. The heuristic
-			// here can be: if there's characters within 50ms, then assume they are control characters and nuke them.
-			select {
-			case <-timeoutCh:
-			default:
-				log.InfoLog.Printf("nuked first stdin: %s", buf[:nr])
-				continue
-			}
-
-			// Check for Ctrl+q (ASCII 17)
-			if nr == 1 && buf[0] == 17 {
-				// Detach from the session
-				t.Detach()
-				return
-			}
-
-			// Forward other input to tmux
-			_, _ = t.ptmx.Write(buf[:nr])
 		}
 	}()
 
@@ -577,24 +601,23 @@ func (t *TmuxSession) DetachSafely() error {
 
 	var errs []error
 
+	if t.cancel != nil {
+		t.cancel()
+		t.cancel = nil
+	}
+	if t.attachOut != nil {
+		t.attachOut.stop()
+	}
+
 	// Close the attached pty session.
+	t.mu.Lock()
 	if t.ptmx != nil {
 		if err := t.ptmx.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("error closing attach pty session: %w", err))
 		}
 		t.ptmx = nil
 	}
-
-	// Clean up attach state
-	if t.attachCh != nil {
-		close(t.attachCh)
-		t.attachCh = nil
-	}
-
-	if t.cancel != nil {
-		t.cancel()
-		t.cancel = nil
-	}
+	t.mu.Unlock()
 
 	if t.wg != nil {
 		t.wg.Wait()
@@ -602,6 +625,7 @@ func (t *TmuxSession) DetachSafely() error {
 	}
 
 	t.ctx = nil
+	t.endAttach()
 
 	if len(errs) > 0 {
 		return fmt.Errorf("errors during detach: %v", errs)
@@ -609,21 +633,16 @@ func (t *TmuxSession) DetachSafely() error {
 	return nil
 }
 
-// Detach disconnects from the current tmux session. It panics if detaching fails. At the moment, there's no
-// way to recover from a failed detach.
+// Detach disconnects from the current tmux session and reconnects the background
+// client. It runs on the terminal input goroutine (Ctrl+Q) while the TUI keeps going.
 func (t *TmuxSession) Detach() {
-	// TODO: control flow is a bit messy here. If there's an error,
-	// I'm not sure if we get into a bad state. Needs testing.
-	defer func() {
-		close(t.attachCh)
-		t.attachCh = nil
-		t.cancel = nil
-		t.ctx = nil
-		t.wg = nil
-	}()
+	// Cancel first, so the output copier sees a normal detach when its PTY closes.
+	t.cancel()
 
-	// Close the attached pty session.
+	t.attachOut.stop()
+	t.mu.Lock()
 	err := t.ptmx.Close()
+	t.mu.Unlock()
 	if err != nil {
 		// This is a fatal error. We can't detach if we can't close the PTY. It's better to just panic and have the
 		// user re-invoke the program than to ruin their terminal pane.
@@ -631,22 +650,64 @@ func (t *TmuxSession) Detach() {
 		log.ErrorLog.Println(msg)
 		panic(msg)
 	}
+	t.wg.Wait()
 	// The attached tmux client changed terminal modes (scroll region, cursor keys, ...)
 	// and closing it abruptly leaves them set. Restore them.
 	_, _ = os.Stdout.WriteString(ResetTerminalModes)
 
-	// Attach goroutines should die on EOF due to the ptmx closing. Call
-	// t.Restore to set a new t.ptmx.
-	if err = t.Restore(); err != nil {
-		// This is a fatal error. Our invariant that a started TmuxSession always has a valid ptmx is violated.
-		msg := fmt.Sprintf("error closing attach pty session: %v", err)
-		log.ErrorLog.Println(msg)
-		panic(msg)
+	t.mu.Lock()
+	if err := t.Restore(); err != nil {
+		// The session ended while open (the program exited). There is no background
+		// client to go back to; the instance notices the session is gone.
+		log.ErrorLog.Printf("could not reconnect to %s after detaching: %v", t.sanitizedName, err)
+		t.ptmx = nil
 	}
+	t.mu.Unlock()
 
-	// Cancel goroutines created by Attach.
-	t.cancel()
-	t.wg.Wait()
+	t.cancel = nil
+	t.ctx = nil
+	t.wg = nil
+	t.endAttach()
+}
+
+// stoppableWriter passes writes through until stop; after that it drops them.
+type stoppableWriter struct {
+	mu      sync.Mutex
+	w       io.Writer
+	stopped bool
+}
+
+func (s *stoppableWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopped {
+		return len(p), nil
+	}
+	return s.w.Write(p)
+}
+
+// stop waits for a write in progress, then drops the rest.
+func (s *stoppableWriter) stop() {
+	s.mu.Lock()
+	s.stopped = true
+	s.mu.Unlock()
+}
+
+// endAttach hands the terminal back to the TUI and signals the caller of Attach.
+func (t *TmuxSession) endAttach() {
+	t.attachOut = nil
+	t.mu.Lock()
+	t.attached = false
+	undivert := t.undivert
+	t.undivert = nil
+	t.mu.Unlock()
+	if undivert != nil {
+		undivert()
+	}
+	if t.attachCh != nil {
+		close(t.attachCh)
+		t.attachCh = nil
+	}
 }
 
 // Close terminates the tmux session and cleans up resources
@@ -684,14 +745,29 @@ func (t *TmuxSession) Close() error {
 }
 
 // SetDetachedSize set the width and height of the session while detached. This makes the
-// tmux output conform to the specified shape.
+// tmux output conform to the specified shape. While the session is open in the
+// terminal the size is only recorded; the background client starts at it on detach.
 func (t *TmuxSession) SetDetachedSize(width, height int) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.detachedCols, t.detachedRows = width, height
-	return t.updateWindowSize(width, height)
+	if t.attached {
+		return nil
+	}
+	return t.setPtySize(width, height)
 }
 
 // updateWindowSize updates the window size of the PTY.
 func (t *TmuxSession) updateWindowSize(cols, rows int) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.setPtySize(cols, rows)
+}
+
+func (t *TmuxSession) setPtySize(cols, rows int) error {
+	if t.ptmx == nil {
+		return ErrSessionNotFound
+	}
 	return pty.Setsize(t.ptmx, winsize(cols, rows))
 }
 

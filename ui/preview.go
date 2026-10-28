@@ -71,7 +71,7 @@ func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 		p.setFallbackState("Setting up workspace...")
 		return nil
 	case instance.Restoring:
-		p.setFallbackState("Restoring archived session: recreating the worktree, running setup, resuming Claude...")
+		p.setFallbackState("Resuming: recreating the worktree, running the setup command, restarting the session...")
 		return nil
 	case instance.Archived:
 		p.setFallbackState(lipgloss.JoinVertical(lipgloss.Center,

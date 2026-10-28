@@ -8,6 +8,7 @@ import (
 	"claude-squad/session/git"
 	"claude-squad/session/tmux"
 	"claude-squad/status"
+	"claude-squad/termio"
 	"claude-squad/ui"
 	"claude-squad/ui/overlay"
 	"context"
@@ -33,10 +34,19 @@ func Run(ctx context.Context, program string, autoYes bool, forceLinear bool) er
 	}
 	// Start from sane terminal modes; an earlier attach may have left them changed.
 	os.Stdout.WriteString(tmux.ResetTerminalModes)
+	// cs reads the terminal itself and passes input on to Bubble Tea, so an open session
+	// can take the input while the TUI keeps polling and spawning (see termio).
+	input, output, stopInput, err := termio.Start()
+	if err != nil {
+		return fmt.Errorf("taking over terminal input: %w", err)
+	}
+	defer stopInput()
 	p := tea.NewProgram(
 		h,
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(), // Mouse scroll
+		tea.WithInput(input),
+		tea.WithOutput(output),
 	)
 	_, err = p.Run()
 	return err
@@ -91,6 +101,9 @@ type home struct {
 	// repaintPending asks for a full repaint after the next update: set when returning
 	// from an attached session, whose tmux client drew over the screen.
 	repaintPending bool
+	// detachWait is set when a session was just opened; Update turns it into a Cmd
+	// that reports the detach (sessionDetachedMsg). The TUI keeps running meanwhile.
+	detachWait chan struct{}
 
 	// -- State --
 
@@ -300,6 +313,13 @@ func (m *home) Init() tea.Cmd {
 
 func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	model, cmd := m.update(msg)
+	if ch := m.detachWait; ch != nil {
+		m.detachWait = nil
+		cmd = tea.Batch(cmd, func() tea.Msg {
+			<-ch
+			return sessionDetachedMsg{}
+		})
+	}
 	if m.repaintPending {
 		m.repaintPending = false
 		cmd = tea.Batch(cmd, tea.ClearScreen)
@@ -323,6 +343,10 @@ func (m *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case keyupMsg:
 		m.menu.ClearKeydown()
 		return m, nil
+	case sessionDetachedMsg:
+		m.state = stateDefault
+		m.repaintPending = true
+		return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
 	case instanceStartDoneMsg:
 		m.instanceStarting = false
 		inst := msg.instance
@@ -406,8 +430,8 @@ func (m *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleTrustPromptCheck(msg)
 	case ticketArchivedMsg:
 		return m, m.handleTicketArchived(msg)
-	case ticketRestoredMsg:
-		return m, m.handleTicketRestored(msg)
+	case resumeDoneMsg:
+		return m, m.handleResumeDone(msg)
 	case resumePromptMsg:
 		return m, m.handleResumePrompt(msg)
 	case ticketUpdateSentMsg:
@@ -422,7 +446,7 @@ func (m *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.handleError(msg.err)
 		}
 		if archived := m.archive.FindByTitle(msg.issue.Identifier); archived != nil {
-			return m, m.restoreTicket(archived, m.resumePrompt(archived.IssueID))
+			return m, m.restoreTicket(archived, m.resumePrompt(archived.IssueID), "t lookup")
 		}
 		cmd, err := m.spawnTicket(msg.issue, false)
 		if err != nil {
@@ -1002,6 +1026,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			}
 
 			// Then kill the instance
+			log.InfoLog.Printf("%s: deleted (D key)", selected.Title)
 			m.list.Kill()
 			return instanceChangedMsg{}
 		}
@@ -1032,21 +1057,6 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		// Show confirmation modal
 		message := fmt.Sprintf("[!] Push changes from session '%s'?", selected.Title)
 		return m, m.confirmAction(message, pushAction)
-	case keys.KeyCheckout:
-		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.Status == session.Loading {
-			return m, nil
-		}
-
-		// Show help screen before pausing
-		m.showHelpScreen(helpTypeInstanceCheckout{}, func() {
-			if err := selected.Pause(); err != nil {
-				m.handleError(err)
-			}
-			m.tabbedWindow.CleanupTerminalForInstance(selected.Title)
-			m.instanceChanged()
-		})
-		return m, nil
 	case keys.KeyMoveUp:
 		if m.list.MoveUp() {
 			if err := m.saveInstances(); err != nil {
@@ -1065,13 +1075,10 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, nil
 	case keys.KeyResume:
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.Status == session.Loading || selected.Restoring {
+		if selected == nil || !selected.Paused() || selected.Restoring {
 			return m, nil
 		}
-		if err := selected.Resume(); err != nil {
-			return m, m.handleError(err)
-		}
-		return m, tea.WindowSize()
+		return m, tea.Batch(m.resumeInBackground(selected, "", "r key"), m.instanceChanged())
 	case keys.KeyEnter:
 		if m.list.NumInstances() == 0 {
 			return m, nil
@@ -1088,9 +1095,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 					m.handleError(err)
 					return
 				}
-				<-ch
-				m.state = stateDefault
-				m.repaintPending = true
+				m.detachWait = ch
 			})
 			return m, nil
 		}
@@ -1103,10 +1108,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 				m.handleError(err)
 				return
 			}
-			<-ch
-			m.state = stateDefault
-			m.repaintPending = true
-			m.instanceChanged()
+			m.detachWait = ch
 		})
 		return m, nil
 	default:
@@ -1157,6 +1159,9 @@ type hideErrMsg struct{}
 type previewTickMsg struct{}
 
 type instanceChangedMsg struct{}
+
+// sessionDetachedMsg reports that the user left a session opened with Enter.
+type sessionDetachedMsg struct{}
 
 type instanceStartedMsg struct {
 	instance        *session.Instance

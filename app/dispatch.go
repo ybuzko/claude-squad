@@ -162,7 +162,6 @@ func (m *home) handlePollDone(msg linearPollDoneMsg) tea.Cmd {
 	plan := planView(msg.view, m.list.GetInstances(), m.archive.GetInstances())
 	persist = persist || plan.changed
 	for _, inst := range plan.archive {
-		log.InfoLog.Printf("%s left the view; archiving its session", inst.IssueID)
 		cmds = append(cmds, m.archiveTicket(inst, true))
 	}
 	if len(plan.archive) > 0 {
@@ -238,7 +237,7 @@ func (m *home) drainPending() []tea.Cmd {
 		}
 		if archived := m.archive.FindByTitle(issue.Identifier); archived != nil {
 			archived.InView = true
-			cmds = append(cmds, m.restoreTicket(archived, m.resumePrompt(issue.Identifier)))
+			cmds = append(cmds, m.restoreTicket(archived, m.resumePrompt(issue.Identifier), "ticket back in the view"))
 			continue
 		}
 		cmd, err := m.spawnTicket(issue, true)
@@ -417,9 +416,11 @@ type viewPlan struct {
 	changed bool
 }
 
-// isBusy reports whether an instance is in the middle of work that archiving would cut off.
+// isBusy reports whether an instance is in the middle of work that archiving would cut
+// off, or is open in the terminal.
 func isBusy(inst *session.Instance) bool {
-	return inst.Status == session.Running || inst.Status == session.Loading || inst.Restoring
+	return inst.Status == session.Running || inst.Status == session.Loading || inst.Restoring ||
+		inst.Attached()
 }
 
 // planView compares the view with what each ticket instance last saw and acts only on

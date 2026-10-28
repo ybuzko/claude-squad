@@ -27,8 +27,8 @@ type ticketArchivedMsg struct {
 	prevInView bool
 }
 
-// ticketRestoredMsg reports the background half of restoring (worktree, setup, tmux).
-type ticketRestoredMsg struct {
+// resumeDoneMsg reports the background half of resuming (worktree, setup, tmux).
+type resumeDoneMsg struct {
 	instance *session.Instance
 	prompt   string
 	err      error
@@ -74,6 +74,11 @@ func (m *home) resumePrompt(issueID string) string {
 // the ticket leaving the view; a manual one keeps InView, so a ticket archived by hand
 // while still in the view is not restored until it leaves and comes back.
 func (m *home) archiveTicket(inst *session.Instance, auto bool) tea.Cmd {
+	reason := "D key"
+	if auto {
+		reason = "ticket left the view"
+	}
+	log.InfoLog.Printf("%s: archiving (%s)", inst.Title, reason)
 	prevInView := inst.InView
 	m.list.Remove(inst)
 	inst.Archived = true
@@ -95,31 +100,40 @@ func (m *home) archiveTicket(inst *session.Instance, auto bool) tea.Cmd {
 }
 
 // restoreTicket moves an archived session back into the active list and resumes it in
-// the background: worktree recreated at its old path, setup command, then
-// `claude --resume`. A non-empty prompt is sent once Claude has started.
-func (m *home) restoreTicket(inst *session.Instance, prompt string) tea.Cmd {
+// the background (see resumeInBackground). reason goes to the log.
+func (m *home) restoreTicket(inst *session.Instance, prompt, reason string) tea.Cmd {
 	m.archive.Remove(inst)
 	inst.Archived = false
 	inst.ArchivedAt = time.Time{}
-	inst.Restoring = true
 	// The resume prompt has it re-read the ticket, comments included.
 	inst.LinearSeenAt = time.Now()
 	m.list.AddInstance(inst)()
-
-	// The old status file describes the previous run; its absence until SessionStart
-	// fires is how resumePromptMsg knows the resumed Claude is up.
-	if err := status.Remove(inst.IssueID); err != nil {
-		log.WarningLog.Printf("could not remove stale status for %s: %v", inst.IssueID, err)
-	}
 
 	var cmds []tea.Cmd
 	if err := m.saveInstances(); err != nil {
 		cmds = append(cmds, m.handleError(err))
 	}
-	cmds = append(cmds, m.instanceChanged(), func() tea.Msg {
-		return ticketRestoredMsg{instance: inst, prompt: prompt, err: inst.Resume()}
-	})
+	cmds = append(cmds, m.resumeInBackground(inst, prompt, "restoring from the archive: "+reason), m.instanceChanged())
 	return tea.Batch(cmds...)
+}
+
+// resumeInBackground resumes a paused session off the UI goroutine: worktree
+// recreated at its old path, setup command, then the tmux session (for tickets,
+// `claude --resume`). A non-empty prompt is sent once Claude has started. reason, what
+// asked for the resume, goes to the log.
+func (m *home) resumeInBackground(inst *session.Instance, prompt, reason string) tea.Cmd {
+	log.InfoLog.Printf("%s: resuming (%s)", inst.Title, reason)
+	inst.Restoring = true
+	if inst.IsTicket() {
+		// The old status file describes the previous run; its absence until
+		// SessionStart fires is how resumePromptMsg knows the resumed Claude is up.
+		if err := status.Remove(inst.IssueID); err != nil {
+			log.WarningLog.Printf("could not remove stale status for %s: %v", inst.IssueID, err)
+		}
+	}
+	return func() tea.Msg {
+		return resumeDoneMsg{instance: inst, prompt: prompt, err: inst.Resume()}
+	}
 }
 
 func (m *home) handleTicketArchived(msg ticketArchivedMsg) tea.Cmd {
@@ -141,14 +155,16 @@ func (m *home) handleTicketArchived(msg ticketArchivedMsg) tea.Cmd {
 	return tea.Batch(append(cmds, m.instanceChanged())...)
 }
 
-func (m *home) handleTicketRestored(msg ticketRestoredMsg) tea.Cmd {
+func (m *home) handleResumeDone(msg resumeDoneMsg) tea.Cmd {
 	inst := msg.instance
 	inst.Restoring = false
 	var cmds []tea.Cmd
 	if msg.err != nil {
 		// The instance stays in the active list as paused; `r` retries.
-		cmds = append(cmds, m.handleError(fmt.Errorf("restoring %s: %w", inst.Title, msg.err)))
+		log.ErrorLog.Printf("%s: resume failed: %v", inst.Title, msg.err)
+		cmds = append(cmds, m.handleError(fmt.Errorf("resuming %s: %w", inst.Title, msg.err)))
 	} else {
+		log.InfoLog.Printf("%s: resumed", inst.Title)
 		cmds = append(cmds, tea.WindowSize(), m.trustPromptCheckCmd(inst, 0))
 		if msg.prompt != "" {
 			cmds = append(cmds, m.resumePromptCmd(inst, msg.prompt, 0))
@@ -278,7 +294,7 @@ func (m *home) handleArchiveKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if selected == nil {
 			return m, nil
 		}
-		restore := m.restoreTicket(selected, "")
+		restore := m.restoreTicket(selected, "", "r key")
 		// Show the restored session where it now lives.
 		m.list.SelectInstance(selected)
 		return m, tea.Batch(restore, m.toggleArchive())
