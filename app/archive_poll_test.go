@@ -100,10 +100,10 @@ func TestFailedArchiveGoesBackToActiveList(t *testing.T) {
 	inst := ticket("TSA-1", session.Ready, true)
 	h.list.AddInstance(inst)
 
-	h.archiveTicket(inst, true)
+	h.archiveSession(inst, true)
 	require.NotNil(t, h.archive.FindByTitle("TSA-1"))
 
-	h.handleTicketArchived(ticketArchivedMsg{instance: inst, err: assert.AnError, prevInView: true})
+	h.handleSessionArchived(sessionArchivedMsg{instance: inst, err: assert.AnError, prevInView: true})
 	assert.Nil(t, h.archive.FindByTitle("TSA-1"))
 	assert.Same(t, inst, h.list.FindByTitle("TSA-1"))
 	assert.False(t, inst.Archived)

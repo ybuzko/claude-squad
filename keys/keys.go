@@ -34,7 +34,7 @@ const (
 
 	// KeyTicket starts a session for a Linear ticket by id (Linear mode only).
 	KeyTicket
-	// KeyArchiveView toggles the archive of ticket sessions (Linear mode only).
+	// KeyArchiveView toggles the archive of sessions.
 	KeyArchiveView
 	// KeyHome and KeyEnd jump to the first and last session in the list.
 	KeyHome
@@ -42,7 +42,6 @@ const (
 
 	// Menu-only labels for keys whose meaning changes with context. They share a key
 	// with an entry above and are not in GlobalKeyStringsMap.
-	KeyArchiveTicket // D on a ticket session
 	KeyRestore       // r in the archive
 	KeyDeleteForever // D in the archive
 	KeyArchiveBack   // a in the archive
@@ -100,9 +99,10 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 		key.WithKeys("n"),
 		key.WithHelp("n", "new"),
 	),
+	// KeyKill archives the selected session (see KeyDeleteForever for the archive view).
 	KeyKill: key.NewBinding(
 		key.WithKeys("D"),
-		key.WithHelp("D", "kill"),
+		key.WithHelp("D", "archive"),
 	),
 	KeyHelp: key.NewBinding(
 		key.WithKeys("?"),
@@ -152,10 +152,6 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeyArchiveView: key.NewBinding(
 		key.WithKeys("a"),
 		key.WithHelp("a", "archived"),
-	),
-	KeyArchiveTicket: key.NewBinding(
-		key.WithKeys("D"),
-		key.WithHelp("D", "archive"),
 	),
 	KeyRestore: key.NewBinding(
 		key.WithKeys("r"),

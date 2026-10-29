@@ -150,13 +150,9 @@ func (m *Menu) addInstanceOptions() {
 	}
 
 	// Instance management group
-	options := []keys.KeyName{keys.KeyNew, keys.KeyKill}
+	options := []keys.KeyName{keys.KeyNew, keys.KeyKill, keys.KeyArchiveView}
 	if m.linearMode {
-		kill := keys.KeyKill
-		if m.instance.IsTicket() {
-			kill = keys.KeyArchiveTicket
-		}
-		options = []keys.KeyName{keys.KeyNew, keys.KeyTicket, kill, keys.KeyArchiveView}
+		options = []keys.KeyName{keys.KeyNew, keys.KeyTicket, keys.KeyKill, keys.KeyArchiveView}
 	}
 
 	// Action group
@@ -189,8 +185,8 @@ func (m *Menu) SetSize(width, height int) {
 func (m *Menu) String() string {
 	var s strings.Builder
 
-	// Define group boundaries. Linear mode adds `t` and `a` to the management group.
-	mgmt := 2
+	// Define group boundaries. Linear mode adds `t` to the management group.
+	mgmt := 3
 	if m.linearMode {
 		mgmt = 4
 	}
@@ -198,7 +194,7 @@ func (m *Menu) String() string {
 		start int
 		end   int
 	}{
-		{0, mgmt},            // Instance management group (n, [t], d, [a])
+		{0, mgmt},            // Instance management group (n, [t], D, a)
 		{mgmt, mgmt + 3},     // Action group (enter, submit, pause/resume)
 		{mgmt + 4, mgmt + 6}, // System group (tab, help, q)
 	}

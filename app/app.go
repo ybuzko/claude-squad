@@ -428,8 +428,8 @@ func (m *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handlePollDone(msg)
 	case trustPromptCheckMsg:
 		return m, m.handleTrustPromptCheck(msg)
-	case ticketArchivedMsg:
-		return m, m.handleTicketArchived(msg)
+	case sessionArchivedMsg:
+		return m, m.handleSessionArchived(msg)
 	case resumeDoneMsg:
 		return m, m.handleResumeDone(msg)
 	case resumePromptMsg:
@@ -446,7 +446,7 @@ func (m *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.handleError(msg.err)
 		}
 		if archived := m.archive.FindByTitle(msg.issue.Identifier); archived != nil {
-			return m, m.restoreTicket(archived, m.resumePrompt(archived.IssueID), "t lookup")
+			return m, m.restoreSession(archived, m.resumePrompt(archived.IssueID), "t lookup")
 		}
 		cmd, err := m.spawnTicket(msg.issue, false)
 		if err != nil {
@@ -905,9 +905,6 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	case keys.KeyHelp:
 		return m.showHelpScreen(helpTypeGeneral{}, nil)
 	case keys.KeyArchiveView:
-		if m.dispatcher == nil {
-			return m, nil
-		}
 		return m, m.toggleArchive()
 	case keys.KeyTicket:
 		if m.dispatcher == nil {
@@ -990,50 +987,13 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, nil
 		}
 
-		// Ticket sessions are archived, never deleted from here: the branch, worktree
-		// path and Claude conversation are kept so the ticket can pick up where it left
-		// off. Permanent deletion lives in the archive view.
-		if selected.IsTicket() {
-			message := fmt.Sprintf("[!] Archive ticket session '%s'? (context kept; `a` shows the archive)", selected.Title)
-			return m, m.confirmThen(message, func() tea.Cmd {
-				return tea.Batch(m.archiveTicket(selected, false), m.instanceChanged())
-			})
-		}
-
-		// Create the kill action as a tea.Cmd
-		killAction := func() tea.Msg {
-			// Get worktree and check if branch is checked out
-			worktree, err := selected.GetGitWorktree()
-			if err != nil {
-				return err
-			}
-
-			checkedOut, err := worktree.IsBranchCheckedOut()
-			if err != nil {
-				return err
-			}
-
-			if checkedOut {
-				return fmt.Errorf("instance %s is currently checked out", selected.Title)
-			}
-
-			// Clean up terminal session for this instance
-			m.tabbedWindow.CleanupTerminalForInstance(selected.Title)
-
-			// Delete from storage first
-			if err := m.storage.DeleteInstance(selected.Title); err != nil {
-				return err
-			}
-
-			// Then kill the instance
-			log.InfoLog.Printf("%s: deleted (D key)", selected.Title)
-			m.list.Kill()
-			return instanceChangedMsg{}
-		}
-
-		// Show confirmation modal
-		message := fmt.Sprintf("[!] Kill session '%s'?", selected.Title)
-		return m, m.confirmAction(message, killAction)
+		// Sessions are archived, never deleted from here: the branch, worktree path and
+		// Claude conversation are kept so the work can pick up where it left off.
+		// Permanent deletion lives in the archive view.
+		message := fmt.Sprintf("[!] Archive session '%s'? (context kept; `a` shows the archive)", selected.Title)
+		return m, m.confirmThen(message, func() tea.Cmd {
+			return tea.Batch(m.archiveSession(selected, false), m.instanceChanged())
+		})
 	case keys.KeySubmit:
 		selected := m.list.GetSelectedInstance()
 		if selected == nil || selected.Status == session.Loading {

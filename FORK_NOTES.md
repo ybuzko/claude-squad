@@ -20,7 +20,7 @@ Where the fork hooks in. Keep this table current when rebasing.
 | Status heuristic | `session/tmux/tmux.go` `HasUpdated()` — sha256 of `capture-pane`; changed → `Running`, else `Ready` | unchanged; used only for instances without a status file |
 | tmux session | `tmux new-session -d -s claudesquad_<title> -c <worktree> <program>` | `-e CS_ISSUE_ID=<id>` added for ticket instances; Claude commands get `--remote-control=<name>` (`Instance.withRemoteControl`: "TSA-196 <ticket title>" for tickets, the title otherwise), on first start and on resume, so every session shows up in claude.ai and the Claude app |
 | Worktree + branch | `session/git/worktree.go`: branch = `BranchPrefix + title` (lowercased by `sanitizeBranchName`), path `~/.claude-squad/worktrees/<branch>_<hex>`, base = `HEAD` of repo | `NewGitWorktreeForBranch(...)` takes an explicit branch + base ref (`origin/main`, fetched first) |
-| Pause / Resume / Kill | `Instance.Pause()` keeps branch + path; `Resume()` restarts tmux with the same `Program`; `Kill()` drops worktree **and** branch | the `c` (checkout = pause) key is removed: it deleted the worktree while leaving the program running in it; `r` resumes in the background (`resumeInBackground`), and every pause, resume, archive and restore is logged with what triggered it; ticket instances: `D` archives (`StopForArchive` = `Pause` + kill tmux); permanent delete (`Kill`) only from the archive view; `Resume()` uses `claude --resume <session>` / `claude -c`, or the original program when Claude never stored a conversation for the worktree (`claude -c` would exit at once and end the tmux session) |
+| Pause / Resume / Kill | `Instance.Pause()` keeps branch + path; `Resume()` restarts tmux with the same `Program`; `Kill()` drops worktree **and** branch | the `c` (checkout = pause) key is removed: it deleted the worktree while leaving the program running in it; `r` resumes in the background (`resumeInBackground`), and every pause, resume, archive and restore is logged with what triggered it; `D` archives any session, ticket or not (`StopForArchive` = `Pause` + kill tmux); permanent delete (`Kill`) only from the archive view, which is available outside Linear mode too; `Resume()` of a Claude Code session (ticket or not) uses `claude --resume <session>` (tickets only: the id comes from the hooks) / `claude -c`, or the original program when Claude never stored a conversation for the worktree (`claude -c` would exit at once and end the tmux session) |
 | Config | `config/config.go`, `~/.claude-squad/config.json`, `cs debug` | `linear`, `spawn`, `instance_limit` sections |
 | List rendering | `ui/list.go` `List.items` (user-ordered via J/K), `InstanceRenderer.Render` glyph by status, header `" Instances "` | urgency sort (blocked → idle → running → paused → done; idle sessions most recently idle first, by `StatusChangedAt`, taken from the hook timestamp for ticket sessions), header counts; `home`/`end` jump to first/last; compact two-line rows (ticket rows: `TSA-123 · <Linear state> (due 10/5)` over the ticket title, refreshed every poll, states containing "blocked" in red; other rows keep the branch); a left click selects a session (`List.ItemAtRow`), scrolled window that follows the selection with `↑/↓ N more` hints (upstream overflowed the viewport); the mouse wheel scrolls whichever pane is under the pointer, and over the list it moves the window without changing the selection (`List.ScrollBy`) until another session is selected (upstream's wheel always scrolled the preview) |
 | Trust prompt | `Instance.CheckAndHandleTrustPrompt()` exists upstream but is never called | called on a backoff (1–21 s) after auto-spawn; moves the selection to "Yes, I trust this folder" before confirming, since current Claude Code defaults to "No, exit" |
@@ -122,16 +122,18 @@ batch of spawns all hit the dialog, which the auto-dismiss answers.
 | Key | Behaviour |
 |---|---|
 | `t` | Prompt for an issue id (any ticket, in the view or not) and spawn it like the poller would. An archived ticket is restored instead, with `spawn.resume_prompt` |
-| `D` | On a ticket session (any state): **archive** it. Plain `n`/`N` sessions keep upstream kill |
-| `a` | Toggle the archive view. There: `r` restores (no prompt), `D` deletes for good, `a`/`esc` goes back |
+| `D` | On any session (any state but loading/resuming): **archive** it. Plain `n`/`N` sessions too; upstream kill is gone (delete for good from the archive) |
+| `a` | Toggle the archive view (also outside Linear mode). There: `r` restores (no prompt), `D` deletes for good, `a`/`esc` goes back |
 | `r` | Resume a paused session (e.g. after its tmux server died), in the background |
 | `c` | Removed (upstream checkout/pause) |
 | `n` / `N` | Unchanged — plain sessions for non-ticket work, created from `spawn.repo_path` |
 
 ## Archive
 
-Ticket sessions are never thrown away implicitly; they move to an archive and come back
-with their full context.
+Sessions are never thrown away implicitly; they move to an archive and come back with
+their full context. Everything below the first two bullets is about ticket sessions,
+which the poller also archives and restores; plain `n`/`N` sessions are archived only
+with `D`, restored only with `r` in the archive, and resume with `claude -c`.
 
 - **Archived** = paused (uncommitted work committed to the branch as
   `[claudesquad] update from …`, worktree removed, branch kept) with tmux and Claude

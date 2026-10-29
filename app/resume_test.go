@@ -39,3 +39,22 @@ func TestCheckoutKeyIsGone(t *testing.T) {
 	assert.Equal(t, session.Running, running.Status)
 	assert.Equal(t, stateDefault, h.state)
 }
+
+// D archives every session, not just tickets, and the archive is there without Linear.
+func TestKillKeyArchivesPlainSessions(t *testing.T) {
+	h := newPollHome(t)
+	h.dispatcher = nil
+	plain := &session.Instance{Title: "scratch", Status: session.Ready}
+	h.list.AddInstance(plain)
+
+	press(h, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
+	assert.Equal(t, stateConfirm, h.state)
+	press(h, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+
+	assert.Nil(t, h.list.FindByTitle("scratch"))
+	assert.Same(t, plain, h.archive.FindByTitle("scratch"))
+	assert.True(t, plain.Archived)
+
+	press(h, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	assert.True(t, h.showArchive)
+}

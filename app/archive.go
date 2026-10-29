@@ -13,14 +13,16 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// The archive keeps ticket sessions whose work is over for now: paused (worktree
-// removed, branch kept), tmux and Claude stopped, out of the active list and out of
-// instance_limit. Each keeps its worktree path and Claude session id, so restoring
-// recreates the worktree where it was and `claude --resume` continues the same
-// conversation. Archived instances are persisted with the rest in state.json.
+// The archive keeps sessions whose work is over for now: paused (worktree removed,
+// branch kept), tmux and Claude stopped, out of the active list and out of
+// instance_limit. Each keeps its worktree path (and, for tickets, its Claude session
+// id), so restoring recreates the worktree where it was and `claude --resume` or
+// `claude -c` continues the same conversation. Archived instances are persisted with
+// the rest in state.json. `D` archives any session; deleting for good happens only
+// from the archive view.
 
-// ticketArchivedMsg reports the background half of archiving (pause + tmux stop).
-type ticketArchivedMsg struct {
+// sessionArchivedMsg reports the background half of archiving (pause + tmux stop).
+type sessionArchivedMsg struct {
 	instance *session.Instance
 	err      error
 	// prevInView is restored if archiving fails, so an automatic archive is retried.
@@ -69,11 +71,11 @@ func (m *home) resumePrompt(issueID string) string {
 	return strings.ReplaceAll(m.dispatcher.cfg.Spawn.ResumePrompt, "{ISSUE_ID}", issueID)
 }
 
-// archiveTicket moves a ticket session into the archive right away, then pauses it
+// archiveSession moves a session into the archive right away, then pauses it
 // and stops its tmux session in the background. auto marks an archive triggered by
 // the ticket leaving the view; a manual one keeps InView, so a ticket archived by hand
 // while still in the view is not restored until it leaves and comes back.
-func (m *home) archiveTicket(inst *session.Instance, auto bool) tea.Cmd {
+func (m *home) archiveSession(inst *session.Instance, auto bool) tea.Cmd {
 	reason := "D key"
 	if auto {
 		reason = "ticket left the view"
@@ -94,14 +96,14 @@ func (m *home) archiveTicket(inst *session.Instance, auto bool) tea.Cmd {
 		cmds = append(cmds, m.handleError(err))
 	}
 	cmds = append(cmds, func() tea.Msg {
-		return ticketArchivedMsg{instance: inst, err: inst.StopForArchive(), prevInView: prevInView}
+		return sessionArchivedMsg{instance: inst, err: inst.StopForArchive(), prevInView: prevInView}
 	})
 	return tea.Batch(cmds...)
 }
 
-// restoreTicket moves an archived session back into the active list and resumes it in
+// restoreSession moves an archived session back into the active list and resumes it in
 // the background (see resumeInBackground). reason goes to the log.
-func (m *home) restoreTicket(inst *session.Instance, prompt, reason string) tea.Cmd {
+func (m *home) restoreSession(inst *session.Instance, prompt, reason string) tea.Cmd {
 	m.archive.Remove(inst)
 	inst.Archived = false
 	inst.ArchivedAt = time.Time{}
@@ -136,7 +138,7 @@ func (m *home) resumeInBackground(inst *session.Instance, prompt, reason string)
 	}
 }
 
-func (m *home) handleTicketArchived(msg ticketArchivedMsg) tea.Cmd {
+func (m *home) handleSessionArchived(msg sessionArchivedMsg) tea.Cmd {
 	var cmds []tea.Cmd
 	if msg.err != nil {
 		// Pause refuses to go on when it cannot commit the worktree, so the session may
@@ -294,7 +296,7 @@ func (m *home) handleArchiveKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if selected == nil {
 			return m, nil
 		}
-		restore := m.restoreTicket(selected, "", "r key")
+		restore := m.restoreSession(selected, "", "r key")
 		// Show the restored session where it now lives.
 		m.list.SelectInstance(selected)
 		return m, tea.Batch(restore, m.toggleArchive())

@@ -162,7 +162,7 @@ func (m *home) handlePollDone(msg linearPollDoneMsg) tea.Cmd {
 	plan := planView(msg.view, m.list.GetInstances(), m.archive.GetInstances())
 	persist = persist || plan.changed
 	for _, inst := range plan.archive {
-		cmds = append(cmds, m.archiveTicket(inst, true))
+		cmds = append(cmds, m.archiveSession(inst, true))
 	}
 	if len(plan.archive) > 0 {
 		cmds = append(cmds, m.instanceChanged())
@@ -237,7 +237,7 @@ func (m *home) drainPending() []tea.Cmd {
 		}
 		if archived := m.archive.FindByTitle(issue.Identifier); archived != nil {
 			archived.InView = true
-			cmds = append(cmds, m.restoreTicket(archived, m.resumePrompt(issue.Identifier), "ticket back in the view"))
+			cmds = append(cmds, m.restoreSession(archived, m.resumePrompt(issue.Identifier), "ticket back in the view"))
 			continue
 		}
 		cmd, err := m.spawnTicket(issue, true)

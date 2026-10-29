@@ -87,8 +87,8 @@ type Instance struct {
 	// SetupCommand runs in the worktree whenever it is (re)created, before the program.
 	SetupCommand string
 
-	// Archived ticket instances are paused and kept out of the active list so their
-	// branch, worktree path and Claude session survive until the ticket comes back.
+	// Archived instances are paused and kept out of the active list so their branch,
+	// worktree path and Claude session survive until they are restored.
 	Archived   bool
 	ArchivedAt time.Time
 	// InView records whether the ticket was in the Linear view at the last poll. The
@@ -360,9 +360,9 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// ResumeProgram is the command used to restart a ticket instance's tmux session so
-// the Claude Code conversation continues instead of re-running the initial prompt.
-// Hand-created instances always get their original program back.
+// ResumeProgram is the command used to restart an instance's tmux session so the
+// Claude Code conversation continues instead of re-running the initial prompt. Other
+// programs get their original command back.
 func (i *Instance) ResumeProgram() string {
 	dir := ""
 	if i.gitWorktree != nil {
@@ -373,7 +373,7 @@ func (i *Instance) ResumeProgram() string {
 
 // resumeProgramIn is ResumeProgram for a worktree at dir ("" = unknown).
 func (i *Instance) resumeProgramIn(dir string) string {
-	if !i.IsTicket() {
+	if !i.IsTicket() && tmux.BaseProgram(i.Program) != tmux.ProgramClaude {
 		return i.Program
 	}
 	fields := strings.Fields(i.Program)
@@ -870,7 +870,7 @@ func (i *Instance) removeLeftoverWorktree() error {
 
 // CloseTmux kills the tmux session (and the program in it) while leaving the
 // worktree and branch alone. A later Resume starts a fresh session with
-// ResumeProgram, so for ticket instances the Claude conversation carries over.
+// ResumeProgram, so for Claude Code instances the conversation carries over.
 func (i *Instance) CloseTmux() error {
 	if !i.started || i.tmuxSession == nil {
 		return nil
@@ -917,8 +917,8 @@ func (i *Instance) Resume() error {
 		}
 	}
 
-	// A fresh tmux session for a ticket should continue the Claude Code conversation
-	// rather than re-run the initial triage prompt.
+	// A fresh tmux session should continue the Claude Code conversation rather than
+	// re-run the initial prompt.
 	i.tmuxSession.SetProgram(i.launchCommand(i.ResumeProgram()))
 
 	// Check if tmux session still exists from pause, otherwise create new one

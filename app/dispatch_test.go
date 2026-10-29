@@ -40,7 +40,9 @@ func TestApplyHookStatus(t *testing.T) {
 
 func TestResumeProgram(t *testing.T) {
 	manual := &session.Instance{Title: "scratch", Program: "/usr/local/bin/claude"}
-	assert.Equal(t, "/usr/local/bin/claude", manual.ResumeProgram())
+	assert.Equal(t, "/usr/local/bin/claude -c", manual.ResumeProgram(), "hand-made Claude sessions continue too")
+	other := &session.Instance{Title: "aider", Program: "aider --model x"}
+	assert.Equal(t, "aider --model x", other.ResumeProgram(), "other programs start over")
 
 	ticket := &session.Instance{Title: "TSA-1", IssueID: "TSA-1", Program: `/usr/local/bin/claude "/triage TSA-1"`}
 	assert.Equal(t, "/usr/local/bin/claude -c", ticket.ResumeProgram())
