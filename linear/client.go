@@ -44,9 +44,31 @@ func NewClient(apiKey string) *Client {
 	return &Client{
 		apiKey:   apiKey,
 		endpoint: DefaultEndpoint,
-		http:     &http.Client{Timeout: 30 * time.Second},
+		http:     &http.Client{Timeout: 30 * time.Second, Transport: newTransport()},
 	}
 }
+
+// newTransport is the default transport with HTTP/2 health checks. Every request goes
+// over one HTTP/2 connection; when the network drops it silently (sleep, VPN or Wi-Fi
+// change) the kernel keeps retrying for about 15 minutes, and without a ping every
+// request in that time is sent down the dead connection and times out. With one, an
+// unanswered ping closes the connection and the next request dials a fresh one.
+func newTransport() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.HTTP2 = &http.HTTP2Config{
+		SendPingTimeout:  http2PingAfter,
+		PingTimeout:      http2PingTimeout,
+		WriteByteTimeout: 15 * time.Second,
+	}
+	return t
+}
+
+// A ping is sent after http2PingAfter without a frame from Linear; the connection is
+// closed if the answer takes longer than http2PingTimeout. Variables for tests.
+var (
+	http2PingAfter   = 10 * time.Second
+	http2PingTimeout = 5 * time.Second
+)
 
 // NewClientWithEndpoint is for tests.
 func NewClientWithEndpoint(apiKey, endpoint string) *Client {
