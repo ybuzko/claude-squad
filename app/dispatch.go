@@ -27,8 +27,6 @@ type dispatcher struct {
 	pending []linear.Issue
 	// polling is true while a poll is in flight, so a manual trigger cannot overlap it.
 	polling bool
-	// delivering holds sessions an update is being typed into (see deliverTicketUpdates).
-	delivering map[*session.Instance]bool
 }
 
 func newDispatcher(cfg *config.Config) (*dispatcher, error) {

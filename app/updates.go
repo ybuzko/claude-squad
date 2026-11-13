@@ -61,10 +61,6 @@ func (m *home) watchedTickets(now time.Time) (ids []string, since time.Time, see
 // LinearSeenAt: paused sessions are resumed with the update prompt, idle ones get it
 // typed in, and busy ones wait for a later poll. comments is oldest first.
 func (m *home) deliverTicketUpdates(comments []linear.Comment) []tea.Cmd {
-	d := m.dispatcher
-	if d.delivering == nil {
-		d.delivering = make(map[*session.Instance]bool)
-	}
 	byIssue := make(map[string][]linear.Comment)
 	for _, c := range comments {
 		if !c.IsMe {
@@ -81,7 +77,7 @@ func (m *home) deliverTicketUpdates(comments []linear.Comment) []tea.Cmd {
 			}
 		}
 		// A session open in the terminal waits: the user is in it.
-		if len(news) == 0 || d.delivering[inst] || inst.Restoring || inst.Pausing ||
+		if len(news) == 0 || m.delivering[inst] || inst.Restoring || inst.Pausing ||
 			inst.Status == session.Loading || inst.Attached() {
 			continue
 		}
@@ -89,7 +85,7 @@ func (m *home) deliverTicketUpdates(comments []linear.Comment) []tea.Cmd {
 		seen := news[len(news)-1].CreatedAt
 		if inst.Paused() {
 			inst.LinearSeenAt = seen
-			inst.LinearUpdateAt = time.Now()
+			inst.NewsAt = time.Now()
 			persist = true
 			cmds = append(cmds, m.resumeInBackground(inst, prompt, fmt.Sprintf("%d new Linear comment(s)", len(news))))
 			continue
@@ -97,7 +93,7 @@ func (m *home) deliverTicketUpdates(comments []linear.Comment) []tea.Cmd {
 		if !acceptsPrompt(inst) {
 			continue
 		}
-		d.delivering[inst] = true
+		m.delivering[inst] = true
 		cmds = append(cmds, func() tea.Msg {
 			empty, err := inst.InputBoxEmpty()
 			if err != nil || !empty {
@@ -116,7 +112,7 @@ func (m *home) deliverTicketUpdates(comments []linear.Comment) []tea.Cmd {
 
 func (m *home) handleTicketUpdateSent(msg ticketUpdateSentMsg) tea.Cmd {
 	inst := msg.instance
-	delete(m.dispatcher.delivering, inst)
+	delete(m.delivering, inst)
 	if msg.skipped {
 		return nil
 	}
@@ -125,7 +121,7 @@ func (m *home) handleTicketUpdateSent(msg ticketUpdateSentMsg) tea.Cmd {
 	}
 	log.InfoLog.Printf("%s: sent new Linear comments to the session", inst.Title)
 	inst.LinearSeenAt = msg.seen
-	inst.LinearUpdateAt = time.Now()
+	inst.NewsAt = time.Now()
 	if err := m.saveInstances(); err != nil {
 		return m.handleError(err)
 	}
@@ -133,9 +129,12 @@ func (m *home) handleTicketUpdateSent(msg ticketUpdateSentMsg) tea.Cmd {
 }
 
 // acceptsPrompt reports whether a running session is waiting at its input box. The
-// hook status is authoritative for ticket sessions; without one, fall back to the
-// pane heuristic.
+// hook status is authoritative for ticket sessions; without one (and for sessions
+// made by hand), fall back to the pane heuristic.
 func acceptsPrompt(inst *session.Instance) bool {
+	if !inst.IsTicket() {
+		return inst.Status == session.Ready
+	}
 	hs, err := status.Read(inst.IssueID)
 	if err != nil {
 		log.WarningLog.Printf("could not read hook status for %s: %v", inst.IssueID, err)

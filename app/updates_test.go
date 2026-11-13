@@ -67,7 +67,7 @@ func TestDeliverTicketUpdatesWaitsForAnIdleSession(t *testing.T) {
 
 	cmds = h.deliverTicketUpdates([]linear.Comment{comment("TSA-1", "Kristin Cella", false, at)})
 	require.Len(t, cmds, 1)
-	assert.True(t, h.dispatcher.delivering[idle])
+	assert.True(t, h.delivering[idle])
 	assert.Empty(t, h.deliverTicketUpdates([]linear.Comment{comment("TSA-1", "Kristin Cella", false, at)}),
 		"one delivery at a time")
 
@@ -76,12 +76,12 @@ func TestDeliverTicketUpdatesWaitsForAnIdleSession(t *testing.T) {
 	msg := cmds[0]().(ticketUpdateSentMsg)
 	assert.True(t, msg.skipped)
 	h.handleTicketUpdateSent(msg)
-	assert.False(t, h.dispatcher.delivering[idle])
+	assert.False(t, h.delivering[idle])
 	assert.Equal(t, seen, idle.LinearSeenAt)
 
 	h.handleTicketUpdateSent(ticketUpdateSentMsg{instance: idle, seen: at})
 	assert.Equal(t, at, idle.LinearSeenAt)
-	assert.False(t, idle.LinearUpdateAt.IsZero(), "the row shows that an update went in")
+	assert.False(t, idle.NewsAt.IsZero(), "the row shows that an update went in")
 }
 
 func TestDeliverTicketUpdatesResumesPausedSession(t *testing.T) {
@@ -100,7 +100,7 @@ func TestDeliverTicketUpdatesResumesPausedSession(t *testing.T) {
 	require.Len(t, cmds, 1)
 	assert.True(t, paused.Restoring)
 	assert.Equal(t, at.Add(time.Minute), paused.LinearSeenAt)
-	assert.False(t, paused.LinearUpdateAt.IsZero())
+	assert.False(t, paused.NewsAt.IsZero())
 }
 
 // A ticket caught halfway through `p` gets its comments on a later poll, once paused.

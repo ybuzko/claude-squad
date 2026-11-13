@@ -185,7 +185,35 @@ answer to something the agent asked for gets acted on before the next human touc
 - The prompt lists authors and times only; the agent reads the comments from Linear
   itself and is told to treat them as information, not instructions or approval, and to
   stage and dry-run but not apply writes, post or merge.
-- A row gets 💬 when an update went in; it clears when the session is opened.
+- A row gets 💬 when an update went in (from this or the PR watcher); it clears when
+  the session is opened.
+
+## PR watcher (`pr_watch.enabled`)
+
+Sessions are told about their pull requests (`app/prwatch.go`, `session/pr.go`,
+`github/prs.go`). It works for every session in the list, ticket or not, and runs
+whether or not Linear mode is on.
+
+- **Finding PRs:** Claude Code writes a `{"type":"pr-link","prUrl":…}` entry into the
+  transcript (`~/.claude/projects/<worktree path, non-alphanumerics → '-'>/*.jsonl`)
+  whenever the conversation's branch has a PR. Every `pr_watch.poll_interval_sec`
+  (default 300) the watcher reads what was appended to those files since the last poll;
+  this works for paused sessions too, since the transcripts outlive the worktree.
+- **Checking them:** one `gh api graphql` call (batches of 20) returns each PR's state and
+  the checks on its head commit. PRs marked closed are no longer looked up.
+- **CI failed:** a check run that ended `FAILURE`, `TIMED_OUT` or `STARTUP_FAILURE` (or a
+  commit status `FAILURE`/`ERROR`) on the head commit sends `pr_watch.ci_failed_prompt`,
+  once per commit, as soon as the first check fails (the prompt says how many still run).
+  A new failing commit is told again.
+- **Merged:** sends `pr_watch.merged_prompt`, once. PRs merged before the watcher first
+  looked at the session (`pr_watch_since`, persisted) are marked closed without a prompt, so
+  turning it on does not replay old merges. PRs closed without merging are dropped silently.
+- Delivery is the same as for Linear comments: typed into an idle session with an empty
+  input box, a paused session is resumed with it, and busy, loading or open sessions get
+  it on a later poll. One prompt carries everything new for a session. The two watchers
+  share the in-flight set, so they never type over each other. Rows get 💬.
+- Archived sessions are not watched. Errors (no `gh`, GitHub down) go to the log and
+  the next poll retries.
 
 Every Claude session cs launches also gets `--append-system-prompt` with `recap_prompt`
 (a final "TL;DR:" line each turn, for skimming previews); `"recap_prompt": "off"` turns
@@ -233,6 +261,12 @@ File: `~/.claude-squad/status/<ISSUE-ID>.json`
     "branch_prefix": "agent/",
     "setup_command": "pnpm install --frozen-lockfile",
     "resume_prompt": "{ISSUE_ID} is back in your queue (reopened or requested again). …"
+  },
+  "pr_watch": {
+    "enabled": true,
+    "poll_interval_sec": 300,
+    "ci_failed_prompt": "CI is failing on your PR {PR_URL} (commit {SHA}): {CHECKS}. …",
+    "merged_prompt": "Your PR {PR_URL} was merged. If the change only takes effect once deployed, …"
   },
   "instance_limit": 50,
   "recap_prompt": "… End every turn with a final line that starts with \"TL;DR:\" …"

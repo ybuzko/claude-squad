@@ -79,9 +79,16 @@ type Instance struct {
 	// been told about (or the time it started reading the ticket). Later comments by
 	// others are delivered to it as an update.
 	LinearSeenAt time.Time
-	// LinearUpdateAt is when new ticket comments were last delivered to the session; the
-	// list marks the row until the session is opened (not persisted).
-	LinearUpdateAt time.Time
+	// NewsAt is when news (new ticket comments, a failing or merged PR) was last
+	// delivered to the session; the list marks the row until the session is opened (not
+	// persisted).
+	NewsAt time.Time
+	// PRs are the pull requests the session opened (see PRScanner) and what it has been
+	// told about them.
+	PRs []PullRequest
+	// PRWatchSince is when the PR watcher first looked at this session. PRs merged
+	// before then are not announced.
+	PRWatchSince time.Time
 	// HookReason is the human-readable reason from the last hook status (not persisted).
 	HookReason string
 	// SetupCommand runs in the worktree whenever it is (re)created, before the program.
@@ -151,6 +158,8 @@ func (i *Instance) ToInstanceData() InstanceData {
 		ArchivedAt:      i.ArchivedAt,
 		InView:          i.InView,
 		LinearSeenAt:    i.LinearSeenAt,
+		PRs:             i.PRs,
+		PRWatchSince:    i.PRWatchSince,
 	}
 
 	// Only include worktree data if gitWorktree is initialized
@@ -202,6 +211,8 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		ArchivedAt:      data.ArchivedAt,
 		LinearSeenAt:    data.LinearSeenAt,
 		InView:          data.InView,
+		PRs:             data.PRs,
+		PRWatchSince:    data.PRWatchSince,
 
 		gitWorktree: git.NewGitWorktreeFromStorage(
 			data.Worktree.RepoPath,
@@ -399,21 +410,11 @@ func (i *Instance) resumeProgramIn(dir string) string {
 // a transcript in <config dir>/projects/<dir with every non-alphanumeric character
 // replaced by '-'>. Errors count as "yes" so the caller keeps trying to continue.
 func hasClaudeConversation(dir string) bool {
-	configDir := os.Getenv("CLAUDE_CONFIG_DIR")
-	if configDir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return true
-		}
-		configDir = filepath.Join(home, ".claude")
+	project, err := ClaudeProjectDir(dir)
+	if err != nil {
+		return true
 	}
-	project := []byte(dir)
-	for k, c := range project {
-		if !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9') {
-			project[k] = '-'
-		}
-	}
-	entries, err := os.ReadDir(filepath.Join(configDir, "projects", string(project)))
+	entries, err := os.ReadDir(project)
 	if err != nil {
 		return !os.IsNotExist(err)
 	}

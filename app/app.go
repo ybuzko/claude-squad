@@ -84,6 +84,11 @@ type home struct {
 	appState config.AppState
 	// dispatcher polls Linear and spawns ticket sessions. nil when Linear is disabled.
 	dispatcher *dispatcher
+	// prWatch follows the PRs sessions open. nil when pr_watch is disabled.
+	prWatch *prWatcher
+	// delivering holds sessions a prompt is being typed into by the Linear update or PR
+	// watcher, so the two never type over each other.
+	delivering map[*session.Instance]bool
 	// archive holds archived ticket sessions; showArchive puts it in the left pane.
 	archive     *ui.List
 	showArchive bool
@@ -185,6 +190,8 @@ func newHome(ctx context.Context, program string, autoYes bool, forceLinear bool
 		state:        stateDefault,
 		appState:     appState,
 		dispatcher:   dispatcher,
+		prWatch:      newPRWatcher(appConfig),
+		delivering:   make(map[*session.Instance]bool),
 	}
 	h.list = ui.NewList(&h.spinner, autoYes)
 	h.list.SetLinearMode(dispatcher != nil)
@@ -308,6 +315,7 @@ func (m *home) Init() tea.Cmd {
 		tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance()),
 		// First Linear poll runs immediately; subsequent ones follow the configured interval.
 		m.runPollCmd(),
+		m.runPRPollCmd(),
 	)
 }
 
@@ -436,6 +444,12 @@ func (m *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handlePauseDone(msg)
 	case resumePromptMsg:
 		return m, m.handleResumePrompt(msg)
+	case prPollTickMsg:
+		return m, m.runPRPollCmd()
+	case prPollDoneMsg:
+		return m, m.handlePRPollDone(msg)
+	case prNewsSentMsg:
+		return m, m.handlePRNewsSent(msg)
 	case ticketUpdateSentMsg:
 		return m, m.handleTicketUpdateSent(msg)
 	case archivedDeletedMsg:
@@ -1074,7 +1088,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, nil
 		}
 		// Opening the session is the human touch the update marker waits for.
-		selected.LinearUpdateAt = time.Time{}
+		selected.NewsAt = time.Time{}
 		// Show help screen before attaching
 		m.showHelpScreen(helpTypeInstanceAttach{}, func() {
 			ch, err := m.list.Attach()

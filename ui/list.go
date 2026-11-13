@@ -285,8 +285,8 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 	if due := dueLabel(i.IssueDueDate, time.Now()); due != "" {
 		plain += " (" + due + ")"
 	}
-	if !i.LinearUpdateAt.IsZero() {
-		// New ticket comments were handed to the session since it was last opened.
+	if !i.NewsAt.IsZero() {
+		// News (ticket comments, PR results) was handed to the session since it was last opened.
 		plain += " 💬"
 	}
 	widthAvail := r.width - 3 - runewidth.StringWidth(prefix) - 1

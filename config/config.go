@@ -57,6 +57,19 @@ type LinearConfig struct {
 	UpdatePrompt string `json:"update_prompt,omitempty"`
 }
 
+// PRWatchConfig drives the PR watcher: it follows the pull requests sessions open (as
+// Claude Code records them in the transcript) and tells the session when CI fails on
+// one or when one is merged.
+type PRWatchConfig struct {
+	Enabled         bool `json:"enabled"`
+	PollIntervalSec int  `json:"poll_interval_sec,omitempty"`
+	// CIFailedPrompt is sent when checks fail on a PR's latest commit. {PR_URL} is the
+	// PR, {SHA} the commit and {CHECKS} the failed checks (and how many still run).
+	CIFailedPrompt string `json:"ci_failed_prompt,omitempty"`
+	// MergedPrompt is sent when a PR is merged. {PR_URL} is the PR.
+	MergedPrompt string `json:"merged_prompt,omitempty"`
+}
+
 // SpawnConfig describes how a ticket session is launched.
 type SpawnConfig struct {
 	// Program is the command run in the tmux session; {ISSUE_ID} is substituted.
@@ -89,9 +102,10 @@ type Config struct {
 	Profiles []Profile `json:"profiles,omitempty"`
 	// InstanceLimit caps the active instances the Linear dispatcher fills up to on its
 	// own. Instances you create by hand (n, N, t, restoring from the archive) may exceed it.
-	InstanceLimit int          `json:"instance_limit"`
-	Linear        LinearConfig `json:"linear"`
-	Spawn         SpawnConfig  `json:"spawn"`
+	InstanceLimit int           `json:"instance_limit"`
+	Linear        LinearConfig  `json:"linear"`
+	Spawn         SpawnConfig   `json:"spawn"`
+	PRWatch       PRWatchConfig `json:"pr_watch"`
 	// RecapPrompt is appended to Claude Code's system prompt in every session cs
 	// launches, asking for a one-line TL;DR at the end of each turn so the preview of
 	// any session shows where it stands. "off" disables it.
@@ -112,6 +126,16 @@ const (
 		"If they unblock anything, push ahead as far as you can without me: investigate, verify, and " +
 		"write, stage and dry-run whatever scripts or changes are needed. Do not apply writes, post " +
 		"anywhere or merge; I will approve or do that myself. If they change nothing, say so briefly."
+	defaultPRWatchIntervalSec = 300
+	defaultCIFailedPrompt     = "CI is failing on your PR {PR_URL} (commit {SHA}): {CHECKS}. " +
+		"Investigate: read the failed jobs' logs (gh pr checks, gh run view --log-failed) and work out " +
+		"whether your change caused it or it is flaky or unrelated. If your change caused it, fix it and " +
+		"push the fix to the PR branch; otherwise say what you found. Do not merge, apply writes or post " +
+		"anywhere without my go."
+	defaultMergedPrompt = "Your PR {PR_URL} was merged. If the change only takes effect once deployed, " +
+		"set up a watcher that follows the deploy until it is live and then verify the effect. If no " +
+		"deploy is needed, go on with the next steps of the work. Anything that needs my approval " +
+		"(writes to tenants, posts, ticket updates) still waits for my go."
 	defaultRecapPrompt = "The user runs many sessions side by side and skims the end of each one. " +
 		"End every turn with a final line that starts with \"TL;DR:\" and says in one sentence where " +
 		"things stand and what, if anything, you need from the user."
@@ -143,6 +167,15 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Linear.UpdatePrompt == "" {
 		c.Linear.UpdatePrompt = defaultLinearUpdatePrompt
+	}
+	if c.PRWatch.PollIntervalSec <= 0 {
+		c.PRWatch.PollIntervalSec = defaultPRWatchIntervalSec
+	}
+	if c.PRWatch.CIFailedPrompt == "" {
+		c.PRWatch.CIFailedPrompt = defaultCIFailedPrompt
+	}
+	if c.PRWatch.MergedPrompt == "" {
+		c.PRWatch.MergedPrompt = defaultMergedPrompt
 	}
 	if c.RecapPrompt == "" {
 		c.RecapPrompt = defaultRecapPrompt

@@ -33,6 +33,7 @@ func newPollHome(t *testing.T) *home {
 		errBox:       ui.NewErrBox(),
 		tabbedWindow: ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane(), ui.NewTerminalPane()),
 		dispatcher:   &dispatcher{cfg: cfg},
+		delivering:   make(map[*session.Instance]bool),
 	}
 	h.list = ui.NewList(&h.spinner, false)
 	h.archive = ui.NewList(&h.spinner, false)
