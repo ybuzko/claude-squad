@@ -21,7 +21,7 @@ import (
 // the rest in state.json. `D` archives any session; deleting for good happens only
 // from the archive view.
 
-// sessionArchivedMsg reports the background half of archiving (pause + tmux stop).
+// sessionArchivedMsg reports the background half of archiving (Stop).
 type sessionArchivedMsg struct {
 	instance *session.Instance
 	err      error
@@ -33,6 +33,12 @@ type sessionArchivedMsg struct {
 type resumeDoneMsg struct {
 	instance *session.Instance
 	prompt   string
+	err      error
+}
+
+// pauseDoneMsg reports the background half of pausing (Stop).
+type pauseDoneMsg struct {
+	instance *session.Instance
 	err      error
 }
 
@@ -96,7 +102,7 @@ func (m *home) archiveSession(inst *session.Instance, auto bool) tea.Cmd {
 		cmds = append(cmds, m.handleError(err))
 	}
 	cmds = append(cmds, func() tea.Msg {
-		return sessionArchivedMsg{instance: inst, err: inst.StopForArchive(), prevInView: prevInView}
+		return sessionArchivedMsg{instance: inst, err: inst.Stop(), prevInView: prevInView}
 	})
 	return tea.Batch(cmds...)
 }
@@ -136,6 +142,35 @@ func (m *home) resumeInBackground(inst *session.Instance, prompt, reason string)
 	return func() tea.Msg {
 		return resumeDoneMsg{instance: inst, prompt: prompt, err: inst.Resume()}
 	}
+}
+
+// pauseInBackground stops a session off the UI goroutine: uncommitted work committed
+// to the branch, worktree removed, tmux and Claude ended. It stays in the list, paused;
+// `r` resumes it, and so do new comments on its ticket (see deliverTicketUpdates).
+// reason goes to the log.
+func (m *home) pauseInBackground(inst *session.Instance, reason string) tea.Cmd {
+	log.InfoLog.Printf("%s: pausing (%s)", inst.Title, reason)
+	inst.Pausing = true
+	m.tabbedWindow.CleanupTerminalForInstance(inst.Title)
+	return func() tea.Msg {
+		return pauseDoneMsg{instance: inst, err: inst.Stop()}
+	}
+}
+
+func (m *home) handlePauseDone(msg pauseDoneMsg) tea.Cmd {
+	inst := msg.instance
+	inst.Pausing = false
+	var cmds []tea.Cmd
+	if msg.err != nil {
+		log.ErrorLog.Printf("%s: pause failed: %v", inst.Title, msg.err)
+		cmds = append(cmds, m.handleError(fmt.Errorf("pausing %s: %w", inst.Title, msg.err)))
+	} else {
+		log.InfoLog.Printf("%s: paused", inst.Title)
+	}
+	if err := m.saveInstances(); err != nil {
+		cmds = append(cmds, m.handleError(err))
+	}
+	return tea.Batch(append(cmds, m.instanceChanged())...)
 }
 
 func (m *home) handleSessionArchived(msg sessionArchivedMsg) tea.Cmd {

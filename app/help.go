@@ -50,8 +50,9 @@ func (h helpTypeGeneral) toContent() string {
 		keyStyle.Render("ctrl-q")+descStyle.Render("    - Detach from session"),
 		"",
 		headerStyle.Render("Handoff:"),
-		keyStyle.Render("p")+descStyle.Render("         - Commit and push branch to github"),
-		keyStyle.Render("r")+descStyle.Render("         - Resume a paused session"),
+		keyStyle.Render("p")+descStyle.Render("         - Pause: commit work to the branch, remove the worktree, stop Claude"),
+		keyStyle.Render("r")+descStyle.Render("         - Resume a paused session (new ticket comments resume it too)"),
+		keyStyle.Render("P")+descStyle.Render("         - Commit and push branch to github"),
 		"",
 		headerStyle.Render("Other:"),
 		keyStyle.Render("tab")+descStyle.Render("       - Switch between preview, diff, and terminal tabs"),
@@ -78,7 +79,8 @@ func (h helpTypeInstanceStart) toContent() string {
 		keyStyle.Render("D")+descStyle.Render("     - Archive the selected session"),
 		"",
 		headerStyle.Render("Handoff:"),
-		keyStyle.Render("p")+descStyle.Render("     - Push branch to GitHub to create a PR"),
+		keyStyle.Render("p")+descStyle.Render("     - Pause the session; r resumes it"),
+		keyStyle.Render("P")+descStyle.Render("     - Push branch to GitHub to create a PR"),
 	)
 	return content
 }

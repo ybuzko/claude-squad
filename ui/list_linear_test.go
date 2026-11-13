@@ -23,7 +23,7 @@ func newListWith(statuses ...session.Status) (*List, []*session.Instance) {
 	return l, items
 }
 
-func TestSortByUrgencyOrdersBlockedIdleRunningPausedDone(t *testing.T) {
+func TestSortByUrgencyOrdersWorkingBlockedIdlePausedDone(t *testing.T) {
 	l, items := newListWith(session.Done, session.Running, session.Ready, session.Paused, session.Blocked, session.Ready)
 	l.SetSelectedInstance(1) // the Running one
 
@@ -31,12 +31,12 @@ func TestSortByUrgencyOrdersBlockedIdleRunningPausedDone(t *testing.T) {
 	require.True(t, changed)
 
 	got := l.GetInstances()
-	assert.Equal(t, []*session.Instance{items[4], items[2], items[5], items[1], items[3], items[0]}, got)
+	assert.Equal(t, []*session.Instance{items[1], items[4], items[2], items[5], items[3], items[0]}, got)
 	assert.Same(t, items[1], l.GetSelectedInstance(), "selection follows the instance, not the index")
 }
 
 func TestSortByUrgencyIsStableAndReportsNoChange(t *testing.T) {
-	l, items := newListWith(session.Blocked, session.Ready, session.Ready, session.Running)
+	l, items := newListWith(session.Running, session.Blocked, session.Ready, session.Ready)
 	assert.False(t, l.SortByUrgency())
 	assert.Equal(t, items, l.GetInstances())
 }
@@ -66,6 +66,15 @@ func TestSortPutsMostRecentlyIdleFirst(t *testing.T) {
 	for _, it := range l.items {
 		got = append(got, it)
 	}
-	assert.Equal(t, []*session.Instance{items[3], items[2], items[4], items[0], items[1]}, got,
-		"blocked, then idle newest-first, then working")
+	assert.Equal(t, []*session.Instance{items[1], items[3], items[2], items[4], items[0]}, got,
+		"working, then blocked, then idle newest-first")
+}
+
+// Sessions being resumed or paused are working too: they sit with the running ones.
+func TestSortPutsResumingAndPausingWithWorking(t *testing.T) {
+	l, items := newListWith(session.Ready, session.Paused, session.Ready, session.Blocked)
+	items[1].Restoring = true
+	items[2].Pausing = true
+	l.SortByUrgency()
+	assert.Equal(t, []*session.Instance{items[1], items[2], items[3], items[0]}, l.GetInstances())
 }

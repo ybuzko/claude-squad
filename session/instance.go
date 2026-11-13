@@ -97,6 +97,8 @@ type Instance struct {
 	// Restoring is true while an archived instance is being brought back (worktree,
 	// setup command, tmux). Not persisted.
 	Restoring bool
+	// Pausing is true while Stop runs in the background for `p`. Not persisted.
+	Pausing bool
 	// diffSched throttles diff-stat refreshes; see diff_schedule.go.
 	diffSched diffSchedule
 	// StatusChangedAt is when Status last changed (for ticket sessions, the time of the
@@ -819,11 +821,12 @@ func RunSetupCommand(command, dir, title string) (string, error) {
 	return logPath, nil
 }
 
-// StopForArchive pauses a live instance (committing any uncommitted work to its branch
-// and removing the worktree) and ends its tmux session, so nothing keeps running while
-// it is archived. The branch, worktree path and Claude session id are kept, which is
-// what Resume needs to continue the same conversation later.
-func (i *Instance) StopForArchive() error {
+// Stop pauses a live instance (committing any uncommitted work to its branch and
+// removing the worktree) and ends its tmux session, so nothing keeps running while it
+// is paused or archived. The branch, worktree path and Claude session id are kept,
+// which is what Resume needs to continue the same conversation later. Pause alone
+// leaves the program running in a deleted directory.
+func (i *Instance) Stop() error {
 	if i.Status != Paused {
 		if err := i.Pause(); err != nil {
 			return err

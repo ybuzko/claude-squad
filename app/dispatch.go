@@ -420,7 +420,7 @@ type viewPlan struct {
 // off, or is open in the terminal.
 func isBusy(inst *session.Instance) bool {
 	return inst.Status == session.Running || inst.Status == session.Loading || inst.Restoring ||
-		inst.Attached()
+		inst.Pausing || inst.Attached()
 }
 
 // planView compares the view with what each ticket instance last saw and acts only on

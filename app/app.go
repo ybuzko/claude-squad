@@ -432,6 +432,8 @@ func (m *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleSessionArchived(msg)
 	case resumeDoneMsg:
 		return m, m.handleResumeDone(msg)
+	case pauseDoneMsg:
+		return m, m.handlePauseDone(msg)
 	case resumePromptMsg:
 		return m, m.handleResumePrompt(msg)
 	case ticketUpdateSentMsg:
@@ -983,7 +985,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, m.instanceChanged()
 	case keys.KeyKill:
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.Status == session.Loading || selected.Restoring {
+		if selected == nil || selected.Status == session.Loading || selected.Restoring || selected.Pausing {
 			return m, nil
 		}
 
@@ -1033,9 +1035,21 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, m.instanceChanged()
 		}
 		return m, nil
+	case keys.KeyPause:
+		selected := m.list.GetSelectedInstance()
+		if selected == nil || selected.Paused() || selected.Status == session.Loading || selected.Restoring ||
+			selected.Pausing {
+			return m, nil
+		}
+		pause := func() tea.Cmd { return tea.Batch(m.pauseInBackground(selected, "p key"), m.instanceChanged()) }
+		if selected.Status == session.Running {
+			message := fmt.Sprintf("[!] '%s' is working. Pause it anyway? (stops Claude mid-turn)", selected.Title)
+			return m, m.confirmThen(message, pause)
+		}
+		return m, pause()
 	case keys.KeyResume:
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || !selected.Paused() || selected.Restoring {
+		if selected == nil || !selected.Paused() || selected.Restoring || selected.Pausing {
 			return m, nil
 		}
 		return m, tea.Batch(m.resumeInBackground(selected, "", "r key"), m.instanceChanged())
@@ -1207,7 +1221,7 @@ func runInstanceStartCmd(instance *session.Instance) tea.Cmd {
 func (m *home) snapshotActiveInstances() []*session.Instance {
 	var out []*session.Instance
 	for _, inst := range m.list.GetInstances() {
-		if inst.Started() && !inst.Paused() {
+		if inst.Started() && !inst.Paused() && !inst.Pausing {
 			out = append(out, inst)
 		}
 	}

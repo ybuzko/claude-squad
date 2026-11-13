@@ -58,3 +58,31 @@ func TestKillKeyArchivesPlainSessions(t *testing.T) {
 	press(h, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
 	assert.True(t, h.showArchive)
 }
+
+func TestPauseKeyStopsIdleSessionsInTheBackground(t *testing.T) {
+	h := newPollHome(t)
+	idle := &session.Instance{Title: "s1", Status: session.Ready}
+	h.list.AddInstance(idle)
+
+	press(h, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	assert.True(t, idle.Pausing, "no confirmation for an idle session")
+	assert.Equal(t, stateDefault, h.state)
+	press(h, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	press(h, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
+	assert.Equal(t, stateDefault, h.state, "nothing else acts on a session while it pauses")
+
+	h.handlePauseDone(pauseDoneMsg{instance: idle, err: errors.New("commit failed")})
+	assert.False(t, idle.Pausing)
+}
+
+func TestPauseKeyAsksBeforeStoppingAWorkingSession(t *testing.T) {
+	h := newPollHome(t)
+	running := &session.Instance{Title: "s1", Status: session.Running}
+	h.list.AddInstance(running)
+
+	press(h, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	assert.Equal(t, stateConfirm, h.state)
+	assert.False(t, running.Pausing)
+	press(h, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	assert.True(t, running.Pausing)
+}

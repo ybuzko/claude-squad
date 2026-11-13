@@ -81,8 +81,8 @@ func (m *home) deliverTicketUpdates(comments []linear.Comment) []tea.Cmd {
 			}
 		}
 		// A session open in the terminal waits: the user is in it.
-		if len(news) == 0 || d.delivering[inst] || inst.Restoring || inst.Status == session.Loading ||
-			inst.Attached() {
+		if len(news) == 0 || d.delivering[inst] || inst.Restoring || inst.Pausing ||
+			inst.Status == session.Loading || inst.Attached() {
 			continue
 		}
 		prompt := m.updatePrompt(inst.IssueID, news)

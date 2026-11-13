@@ -110,15 +110,20 @@ func (l *List) SetLinearMode(enabled bool) {
 	l.linearMode = enabled
 }
 
-// statusRank orders instances by how urgently they need a human: blocked first, then
-// idle (waiting for a prompt), then working, then paused, then done.
-func statusRank(s session.Status) int {
-	switch s {
-	case session.Blocked:
+// statusRank orders instances: working (including being resumed or paused) first, so
+// the few sessions that change state all the time sit together at the top instead of
+// jumping in and out of a long idle list below; then blocked, idle (waiting for a
+// prompt), paused, done.
+func statusRank(i *session.Instance) int {
+	if i.Restoring || i.Pausing {
 		return 0
-	case session.Ready:
-		return 1
+	}
+	switch i.Status {
 	case session.Running, session.Loading:
+		return 0
+	case session.Blocked:
+		return 1
+	case session.Ready:
 		return 2
 	case session.Paused:
 		return 3
@@ -139,7 +144,7 @@ func (l *List) SortByUrgency() bool {
 	copy(before, l.items)
 	sort.SliceStable(l.items, func(a, b int) bool {
 		ia, ib := l.items[a], l.items[b]
-		ra, rb := statusRank(ia.Status), statusRank(ib.Status)
+		ra, rb := statusRank(ia), statusRank(ib)
 		if ra != rb {
 			return ra < rb
 		}
@@ -265,9 +270,9 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 		descS = listDescStyle
 	}
 
-	// add spinner next to title if it's running (or being resumed)
+	// add spinner next to title if it's running (or being resumed or paused)
 	join := r.statusGlyph(i, titleS.GetBackground())
-	if i.Restoring {
+	if i.Restoring || i.Pausing {
 		join = fmt.Sprintf("%s ", r.spinner.View())
 	}
 

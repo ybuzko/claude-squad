@@ -16,6 +16,9 @@ const (
 	KeyReview
 	KeyPush
 	KeySubmit
+	// KeyPause stops a session (worktree removed, Claude stopped) until `r` or a
+	// ticket update resumes it.
+	KeyPause
 
 	KeyTab        // Tab is a special keybinding for switching between panes.
 	KeySubmitName // SubmitName is a special keybinding for submitting the name of a new instance.
@@ -65,7 +68,8 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"q":          KeyQuit,
 	"tab":        KeyTab,
 	"r":          KeyResume,
-	"p":          KeySubmit,
+	"p":          KeyPause,
+	"P":          KeySubmit,
 	"?":          KeyHelp,
 	"t":          KeyTicket,
 	"a":          KeyArchiveView,
@@ -113,8 +117,12 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 		key.WithHelp("q", "quit"),
 	),
 	KeySubmit: key.NewBinding(
+		key.WithKeys("P"),
+		key.WithHelp("P", "push branch"),
+	),
+	KeyPause: key.NewBinding(
 		key.WithKeys("p"),
-		key.WithHelp("p", "push branch"),
+		key.WithHelp("p", "pause"),
 	),
 	KeyPrompt: key.NewBinding(
 		key.WithKeys("N"),

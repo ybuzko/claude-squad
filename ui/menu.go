@@ -156,10 +156,11 @@ func (m *Menu) addInstanceOptions() {
 	}
 
 	// Action group
-	actionGroup := []keys.KeyName{keys.KeyEnter, keys.KeySubmit}
+	pause := keys.KeyPause
 	if m.instance.Status == session.Paused {
-		actionGroup = append(actionGroup, keys.KeyResume)
+		pause = keys.KeyResume
 	}
+	actionGroup := []keys.KeyName{keys.KeyEnter, pause, keys.KeySubmit}
 
 	// Navigation group (when in diff tab)
 	if m.activeTab == DiffTab || m.activeTab == TerminalTab {
@@ -195,7 +196,7 @@ func (m *Menu) String() string {
 		end   int
 	}{
 		{0, mgmt},            // Instance management group (n, [t], D, a)
-		{mgmt, mgmt + 3},     // Action group (enter, submit, pause/resume)
+		{mgmt, mgmt + 3},     // Action group (enter, pause/resume, push)
 		{mgmt + 4, mgmt + 6}, // System group (tab, help, q)
 	}
 	if m.archiveMode && m.state != StateNewInstance && m.state != StatePrompt {

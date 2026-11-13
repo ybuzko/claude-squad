@@ -70,6 +70,9 @@ func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 	case instance.Status == session.Loading:
 		p.setFallbackState("Setting up workspace...")
 		return nil
+	case instance.Pausing:
+		p.setFallbackState("Pausing: committing work to the branch, removing the worktree, stopping Claude...")
+		return nil
 	case instance.Restoring:
 		p.setFallbackState("Resuming: recreating the worktree, running the setup command, restarting the session...")
 		return nil

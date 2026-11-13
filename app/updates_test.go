@@ -88,6 +88,9 @@ func TestDeliverTicketUpdatesResumesPausedSession(t *testing.T) {
 	h := newPollHome(t)
 	seen := time.Now().Add(-time.Hour)
 	paused := watchedTicket(t, h, "TSA-1", session.Paused, seen)
+	h.dispatcher.cfg.Linear.WatchUpdates = true
+	ids, _, _ := h.watchedTickets(time.Now())
+	assert.Equal(t, []string{"uuid-TSA-1"}, ids, "paused tickets are still watched")
 
 	at := seen.Add(time.Minute)
 	cmds := h.deliverTicketUpdates([]linear.Comment{
@@ -98,6 +101,17 @@ func TestDeliverTicketUpdatesResumesPausedSession(t *testing.T) {
 	assert.True(t, paused.Restoring)
 	assert.Equal(t, at.Add(time.Minute), paused.LinearSeenAt)
 	assert.False(t, paused.LinearUpdateAt.IsZero())
+}
+
+// A ticket caught halfway through `p` gets its comments on a later poll, once paused.
+func TestDeliverTicketUpdatesWaitsForAPauseToFinish(t *testing.T) {
+	h := newPollHome(t)
+	seen := time.Now().Add(-time.Hour)
+	inst := watchedTicket(t, h, "TSA-1", session.Ready, seen)
+	inst.Pausing = true
+
+	assert.Empty(t, h.deliverTicketUpdates([]linear.Comment{comment("TSA-1", "Kristin Cella", false, seen.Add(time.Minute))}))
+	assert.Equal(t, seen, inst.LinearSeenAt, "not marked seen, so the next poll delivers it")
 }
 
 func TestUpdatePromptListsTheNewComments(t *testing.T) {
