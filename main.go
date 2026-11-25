@@ -14,8 +14,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -95,6 +97,28 @@ var (
 		Short: "Claude Code hook: record the status of the cs session in $CS_STATUS_KEY (reads the hook payload from stdin)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return status.HandleHook(os.Stdin, status.KeyFromEnv(os.Getenv), time.Now())
+		},
+	}
+
+	sendCmd = &cobra.Command{
+		Use:   "send <session title or ticket id> [message]",
+		Short: "Queue a prompt for a session; the running cs resumes it if paused and types the prompt in (message from stdin when omitted)",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			msg := strings.Join(args[1:], " ")
+			if len(args) == 1 {
+				in, err := io.ReadAll(os.Stdin)
+				if err != nil {
+					return err
+				}
+				msg = string(in)
+			}
+			path, err := app.QueueMessage(args[0], msg)
+			if err != nil {
+				return err
+			}
+			fmt.Println("queued:", path)
+			return nil
 		},
 	}
 
@@ -217,6 +241,7 @@ func init() {
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(resetCmd)
 	rootCmd.AddCommand(hookCmd)
+	rootCmd.AddCommand(sendCmd)
 }
 
 func main() {

@@ -87,6 +87,8 @@ type home struct {
 	dispatcher *dispatcher
 	// prWatch follows the PRs sessions open. nil when pr_watch is disabled.
 	prWatch *prWatcher
+	// outboxWarned holds the queued messages already reported as having no session.
+	outboxWarned map[string]bool
 	// notifier shows desktop notifications. nil when notify is "off".
 	notifier *notifier
 	// delivering holds sessions a prompt is being typed into by the Linear update or PR
@@ -462,6 +464,8 @@ func (m *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handlePRNewsSent(msg)
 	case ticketUpdateSentMsg:
 		return m, m.handleTicketUpdateSent(msg)
+	case outboxSentMsg:
+		return m, m.handleOutboxSent(msg)
 	case archivedDeletedMsg:
 		if msg.err != nil {
 			return m, m.handleError(fmt.Errorf("deleting %s: %w", msg.title, msg.err))

@@ -173,6 +173,7 @@ func (m *home) handlePollDone(msg linearPollDoneMsg) tea.Cmd {
 	}
 
 	cmds = append(cmds, m.deliverTicketUpdates(msg.comments)...)
+	cmds = append(cmds, m.deliverOutbox()...)
 
 	d.pending = plan.queue
 	cmds = append(cmds, m.drainPending()...)

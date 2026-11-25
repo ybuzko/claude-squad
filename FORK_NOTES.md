@@ -130,6 +130,24 @@ batch of spawns all hit the dialog, which the auto-dismiss answers.
 | `c` | Removed (upstream checkout/pause) |
 | `n` / `N` | Unchanged — plain sessions for non-ticket work, created from `spawn.repo_path` |
 
+## Messages from outside (`cs send`)
+
+`cs send <session title or ticket id> "<prompt>"` (or the prompt on stdin) queues a
+prompt for a session without opening it; a script or another Claude session can use it
+too. It writes `~/.claude-squad/outbox/<name>.md`, and the running cs delivers it on a
+Linear poll the way ticket updates are delivered (`app/outbox.go`):
+
+- **Paused session:** resumed, then the prompt is typed in once `SessionStart` reports.
+- **Idle session:** typed in when the hook status accepts a prompt and the input box is
+  empty. Busy sessions, and the one you have open, wait for a later poll.
+- **Archived or unknown session:** the message waits in the outbox (logged once); it is
+  delivered if the session is restored.
+- A message starts work, so each poll delivers only while fewer than
+  `linear.max_concurrent` sessions are working; the rest follow as those finish.
+- The prompt is flattened to one line. A second `cs send` to the same session before
+  delivery replaces the first. Delivered files move to `outbox/sent/<name>-<time>.md`.
+- Linear mode only: the outbox rides the Linear poll.
+
 ## Archive
 
 Sessions are never thrown away implicitly; they move to an archive and come back with
