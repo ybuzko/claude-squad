@@ -1,5 +1,5 @@
 // Package status is the contract between Claude Code hooks and the TUI. The
-// `cs hook` subcommand writes one JSON file per ticket; the TUI reads it on its
+// `cs hook` subcommand writes one JSON file per session; the TUI reads it on its
 // metadata tick and prefers it over the pane-diff heuristic.
 package status
 
@@ -15,9 +15,22 @@ import (
 	"time"
 )
 
-// IssueIDEnv is set by the spawner on the tmux session. Hooks are a no-op without it,
-// so installing `cs hook` globally does not affect ordinary Claude Code sessions.
+// KeyEnv names the status file of the session; cs sets it on every tmux session it
+// starts. Hooks are a no-op without it (or IssueIDEnv), so installing `cs hook`
+// globally does not affect Claude Code sessions cs did not start.
+const KeyEnv = "CS_STATUS_KEY"
+
+// IssueIDEnv is the ticket id of a ticket session. Sessions started before KeyEnv
+// existed only have this one, and their status file is named after it.
 const IssueIDEnv = "CS_ISSUE_ID"
+
+// KeyFromEnv returns the status file key for the hook's session, "" outside cs.
+func KeyFromEnv(getenv func(string) string) string {
+	if key := getenv(KeyEnv); key != "" {
+		return key
+	}
+	return getenv(IssueIDEnv)
+}
 
 const (
 	StateRunning = "running"
@@ -37,6 +50,9 @@ type Status struct {
 	// Notification is Claude Code's notification_type for a blocked state, e.g.
 	// "permission_prompt", or "idle_prompt" when it is only waiting for the next prompt.
 	Notification string `json:"notification,omitempty"`
+	// Event is the hook event that wrote the state, e.g. "Stop" for a finished turn as
+	// opposed to "SessionStart" for a session that was just resumed.
+	Event string `json:"event,omitempty"`
 }
 
 // AcceptsPrompt reports whether Claude Code is waiting at its input box, so text
@@ -53,7 +69,7 @@ func Dir() (string, error) {
 	return filepath.Join(configDir, "status"), nil
 }
 
-func pathFor(issueID string) (string, error) {
+func pathFor(key string) (string, error) {
 	dir, err := Dir()
 	if err != nil {
 		return "", err
@@ -64,13 +80,16 @@ func pathFor(issueID string) (string, error) {
 			return r
 		}
 		return '_'
-	}, issueID)
+	}, key)
 	return filepath.Join(dir, safe+".json"), nil
 }
 
-// Read returns the status for an issue, or (nil, nil) when no hook has written one.
-func Read(issueID string) (*Status, error) {
-	path, err := pathFor(issueID)
+// Read returns the status for a session key, or (nil, nil) when no hook has written one.
+func Read(key string) (*Status, error) {
+	if key == "" {
+		return nil, nil
+	}
+	path, err := pathFor(key)
 	if err != nil {
 		return nil, err
 	}
@@ -89,8 +108,11 @@ func Read(issueID string) (*Status, error) {
 }
 
 // Remove drops a stale status file, e.g. before respawning a ticket.
-func Remove(issueID string) error {
-	path, err := pathFor(issueID)
+func Remove(key string) error {
+	if key == "" {
+		return nil
+	}
+	path, err := pathFor(key)
 	if err != nil {
 		return err
 	}
@@ -101,8 +123,8 @@ func Remove(issueID string) error {
 }
 
 // Write atomically replaces the status file.
-func Write(issueID string, s Status) error {
-	path, err := pathFor(issueID)
+func Write(key string, s Status) error {
+	path, err := pathFor(key)
 	if err != nil {
 		return err
 	}
@@ -131,10 +153,10 @@ type hookInput struct {
 }
 
 // HandleHook implements `cs hook`: it reads a Claude Code hook payload and updates the
-// status file for the ticket named by the CS_ISSUE_ID environment variable. It
-// returns nil without doing anything when the variable is unset.
-func HandleHook(stdin io.Reader, issueID string, now time.Time) error {
-	if issueID == "" {
+// status file named by key (see KeyFromEnv). It returns nil without doing anything
+// when key is empty.
+func HandleHook(stdin io.Reader, key string, now time.Time) error {
+	if key == "" {
 		return nil
 	}
 	raw, err := io.ReadAll(io.LimitReader(stdin, 4<<20))
@@ -146,11 +168,11 @@ func HandleHook(stdin io.Reader, issueID string, now time.Time) error {
 		return fmt.Errorf("parse hook input: %w", err)
 	}
 
-	prev, err := Read(issueID)
+	prev, err := Read(key)
 	if err != nil {
 		return err
 	}
-	next := Status{TS: now.Unix(), SessionID: in.SessionID}
+	next := Status{TS: now.Unix(), SessionID: in.SessionID, Event: in.HookEventName}
 	if next.SessionID == "" && prev != nil {
 		next.SessionID = prev.SessionID
 	}
@@ -182,7 +204,7 @@ func HandleHook(stdin io.Reader, issueID string, now time.Time) error {
 	default:
 		return nil
 	}
-	return Write(issueID, next)
+	return Write(key, next)
 }
 
 func lastLine(s string) string {

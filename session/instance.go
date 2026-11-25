@@ -5,6 +5,7 @@ import (
 	"claude-squad/log"
 	"claude-squad/session/git"
 	"claude-squad/session/tmux"
+	"claude-squad/status"
 	"errors"
 	"path/filepath"
 
@@ -108,9 +109,9 @@ type Instance struct {
 	Pausing bool
 	// diffSched throttles diff-stat refreshes; see diff_schedule.go.
 	diffSched diffSchedule
-	// StatusChangedAt is when Status last changed (for ticket sessions, the time of the
-	// hook event that changed it). The list puts the most recently idle sessions first.
-	// Not persisted: hook status files restore it for ticket sessions.
+	// StatusChangedAt is when Status last changed (for sessions with a hook status
+	// file, the time of the hook event that changed it). The list puts the most recently
+	// idle sessions first. Not persisted: hook status files restore it.
 	StatusChangedAt time.Time
 
 	// DiffStats stores the current git diff statistics
@@ -306,13 +307,26 @@ func (i *Instance) IsTicket() bool {
 	return i.IssueID != ""
 }
 
-// newTmuxSession builds the tmux session for this instance. Ticket instances export
-// CS_ISSUE_ID so Claude Code hooks can report status for them.
+// StatusKey names the session's hook status file (see package status). It is fixed for
+// the life of the session: the ticket id the session was spawned for (its title) for
+// ticket sessions, even if the ticket later moves to another team and gets a new id,
+// and "session-<title>" for the rest.
+func (i *Instance) StatusKey() string {
+	if i.IsTicket() {
+		return i.Title
+	}
+	return "session-" + i.Title
+}
+
+// newTmuxSession builds the tmux session for this instance. It exports CS_STATUS_KEY
+// so Claude Code hooks can report the session's status, and CS_ISSUE_ID for tickets.
 func (i *Instance) newTmuxSession() *tmux.TmuxSession {
 	s := tmux.NewTmuxSession(i.Title, i.launchCommand(i.Program))
+	env := map[string]string{status.KeyEnv: i.StatusKey()}
 	if i.IsTicket() {
-		s.SetEnv(map[string]string{"CS_ISSUE_ID": i.IssueID})
+		env[status.IssueIDEnv] = i.IssueID
 	}
+	s.SetEnv(env)
 	return s
 }
 
@@ -462,6 +476,11 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 	i.tmuxSession = tmuxSession
 
 	if firstTimeSetup {
+		// A status file left by an earlier session with the same title would be taken
+		// for this one's state until its first hook fires.
+		if err := status.Remove(i.StatusKey()); err != nil {
+			log.WarningLog.Printf("could not remove stale status for %s: %v", i.Title, err)
+		}
 		if i.selectedBranch != "" {
 			gitWorktree, err := git.NewGitWorktreeFromBranch(i.Path, i.selectedBranch, i.Title)
 			if err != nil {

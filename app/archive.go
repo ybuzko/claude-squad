@@ -132,12 +132,10 @@ func (m *home) restoreSession(inst *session.Instance, prompt, reason string) tea
 func (m *home) resumeInBackground(inst *session.Instance, prompt, reason string) tea.Cmd {
 	log.InfoLog.Printf("%s: resuming (%s)", inst.Title, reason)
 	inst.Restoring = true
-	if inst.IsTicket() {
-		// The old status file describes the previous run; its absence until
-		// SessionStart fires is how resumePromptMsg knows the resumed Claude is up.
-		if err := status.Remove(inst.IssueID); err != nil {
-			log.WarningLog.Printf("could not remove stale status for %s: %v", inst.IssueID, err)
-		}
+	// The old status file describes the previous run; its absence until SessionStart
+	// fires is how resumePromptMsg knows the resumed Claude is up.
+	if err := status.Remove(inst.StatusKey()); err != nil {
+		log.WarningLog.Printf("could not remove stale status for %s: %v", inst.Title, err)
 	}
 	return func() tea.Msg {
 		return resumeDoneMsg{instance: inst, prompt: prompt, err: inst.Resume()}
@@ -240,9 +238,9 @@ func (m *home) handleResumePrompt(msg resumePromptMsg) tea.Cmd {
 	if inst.Archived || inst.Paused() || !inst.Started() {
 		return nil
 	}
-	hs, err := status.Read(inst.IssueID)
+	hs, err := status.Read(inst.StatusKey())
 	if err != nil {
-		log.WarningLog.Printf("could not read hook status for %s: %v", inst.IssueID, err)
+		log.WarningLog.Printf("could not read hook status for %s: %v", inst.Title, err)
 	}
 	if hs == nil && msg.attempt < resumePromptAttempts {
 		return m.resumePromptCmd(inst, msg.prompt, msg.attempt+1)
@@ -264,10 +262,8 @@ func (m *home) handleResumePrompt(msg resumePromptMsg) tea.Cmd {
 // file. The Claude transcript under ~/.claude/projects is left alone.
 func (m *home) deleteArchived(inst *session.Instance) tea.Cmd {
 	m.archive.Remove(inst)
-	if inst.IsTicket() {
-		if err := status.Remove(inst.IssueID); err != nil {
-			log.WarningLog.Printf("could not remove status for %s: %v", inst.IssueID, err)
-		}
+	if err := status.Remove(inst.StatusKey()); err != nil {
+		log.WarningLog.Printf("could not remove status for %s: %v", inst.Title, err)
 	}
 	var cmds []tea.Cmd
 	if err := m.saveInstances(); err != nil {

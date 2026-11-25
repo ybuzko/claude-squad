@@ -99,3 +99,28 @@ func TestRemove(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, s)
 }
+
+func TestKeyFromEnvPrefersStatusKey(t *testing.T) {
+	env := map[string]string{}
+	get := func(k string) string { return env[k] }
+	assert.Empty(t, KeyFromEnv(get), "outside cs")
+	env[IssueIDEnv] = "TSA-1"
+	assert.Equal(t, "TSA-1", KeyFromEnv(get), "a ticket session started before CS_STATUS_KEY")
+	env[KeyEnv] = "session-scratch"
+	assert.Equal(t, "session-scratch", KeyFromEnv(get))
+}
+
+func TestHandleHookRecordsTheEvent(t *testing.T) {
+	useTempConfigDir(t)
+	handle(t, "session-scratch", `{"hook_event_name":"Stop","last_assistant_message":"done\nTL;DR: all green"}`)
+	s, err := Read("session-scratch")
+	require.NoError(t, err)
+	assert.Equal(t, "Stop", s.Event)
+	assert.Equal(t, "TL;DR: all green", s.Reason)
+
+	handle(t, "session-scratch", `{"hook_event_name":"SessionStart","source":"resume"}`)
+	s, err = Read("session-scratch")
+	require.NoError(t, err)
+	assert.Equal(t, StateIdle, s.State)
+	assert.Equal(t, "SessionStart", s.Event, "a resumed session is idle but did not finish a turn")
+}

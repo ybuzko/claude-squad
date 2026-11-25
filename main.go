@@ -92,9 +92,9 @@ var (
 
 	hookCmd = &cobra.Command{
 		Use:   "hook",
-		Short: "Claude Code hook: record session status for the ticket in $CS_ISSUE_ID (reads the hook payload from stdin)",
+		Short: "Claude Code hook: record the status of the cs session in $CS_STATUS_KEY (reads the hook payload from stdin)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return status.HandleHook(os.Stdin, os.Getenv(status.IssueIDEnv), time.Now())
+			return status.HandleHook(os.Stdin, status.KeyFromEnv(os.Getenv), time.Now())
 		},
 	}
 

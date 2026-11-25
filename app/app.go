@@ -3,6 +3,7 @@ package app
 import (
 	"claude-squad/config"
 	"claude-squad/keys"
+	"claude-squad/linear"
 	"claude-squad/log"
 	"claude-squad/session"
 	"claude-squad/session/git"
@@ -86,6 +87,8 @@ type home struct {
 	dispatcher *dispatcher
 	// prWatch follows the PRs sessions open. nil when pr_watch is disabled.
 	prWatch *prWatcher
+	// notifier shows desktop notifications. nil when notify is "off".
+	notifier *notifier
 	// delivering holds sessions a prompt is being typed into by the Linear update or PR
 	// watcher, so the two never type over each other.
 	delivering map[*session.Instance]bool
@@ -191,6 +194,7 @@ func newHome(ctx context.Context, program string, autoYes bool, forceLinear bool
 		appState:     appState,
 		dispatcher:   dispatcher,
 		prWatch:      newPRWatcher(appConfig),
+		notifier:     newNotifier(appConfig),
 		delivering:   make(map[*session.Instance]bool),
 	}
 	h.list = ui.NewList(&h.spinner, autoYes)
@@ -383,6 +387,7 @@ func (m *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
 	case metadataUpdateDoneMsg:
 		persist := false
+		var notifyCmds []tea.Cmd
 		for _, r := range msg.results {
 			// Skip instances that were paused while metadata was being computed
 			if r.instance.Status == session.Paused {
@@ -403,6 +408,7 @@ func (m *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			default:
 				r.instance.SetStatus(session.Ready)
 			}
+			notifyCmds = append(notifyCmds, m.noteHookStatus(r.instance, r.hook))
 			if !r.diffComputed {
 				continue
 			}
@@ -415,7 +421,7 @@ func (m *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				r.instance.SetDiffStats(r.diffStats)
 			}
 		}
-		cmds := []tea.Cmd{}
+		cmds := notifyCmds
 		if m.dispatcher != nil {
 			// Not while a new session is being named: its row would jump under the cursor.
 			if m.naming == nil && m.list.SortByUrgency() {
@@ -448,6 +454,10 @@ func (m *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.runPRPollCmd()
 	case prPollDoneMsg:
 		return m, m.handlePRPollDone(msg)
+	case notifyFlushMsg:
+		return m, m.handleNotifyFlush()
+	case notifySentMsg:
+		return m, m.handleNotifySent(msg)
 	case prNewsSentMsg:
 		return m, m.handlePRNewsSent(msg)
 	case ticketUpdateSentMsg:
@@ -461,8 +471,32 @@ func (m *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			return m, m.handleError(msg.err)
 		}
-		if archived := m.archive.FindByTitle(msg.issue.Identifier); archived != nil {
-			return m, m.restoreSession(archived, m.resumePrompt(archived.IssueID), "t lookup")
+		// One session per ticket, matched by Linear UUID so a ticket that moved teams is
+		// found under its old id too: an archived one comes back with its context, an
+		// active one is shown.
+		if inst, archived := m.findTicketSession(msg.issue); inst != nil {
+			moved := refreshTicketDetails([]linear.Issue{msg.issue}, []*session.Instance{inst})
+			if archived {
+				restore := m.restoreSession(inst, m.resumePrompt(inst.IssueID), "t lookup")
+				m.list.SelectInstance(inst)
+				var back tea.Cmd
+				if m.showArchive {
+					back = m.toggleArchive()
+				}
+				return m, tea.Batch(restore, back, m.instanceChanged())
+			}
+			log.InfoLog.Printf("%s: t %s: already has this session; selecting it", inst.Title, msg.issue.Identifier)
+			cmds := []tea.Cmd{m.instanceChanged()}
+			if moved {
+				if err := m.saveInstances(); err != nil {
+					cmds = append(cmds, m.handleError(err))
+				}
+			}
+			if m.showArchive {
+				cmds = append(cmds, m.toggleArchive())
+			}
+			m.list.SelectInstance(inst)
+			return m, tea.Batch(cmds...)
 		}
 		cmd, err := m.spawnTicket(msg.issue, false)
 		if err != nil {
@@ -1269,15 +1303,13 @@ func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instanc
 				r.instance = instance
 				r.updated, r.hasPrompt = instance.HasUpdated()
 				var hookTS int64
-				if instance.IsTicket() {
-					hs, err := status.Read(instance.IssueID)
-					if err != nil {
-						log.WarningLog.Printf("could not read hook status for %s: %v", instance.IssueID, err)
-					}
-					r.hook = hs
-					if hs != nil {
-						hookTS = hs.TS
-					}
+				hs, err := status.Read(instance.StatusKey())
+				if err != nil {
+					log.WarningLog.Printf("could not read hook status for %s: %v", instance.Title, err)
+				}
+				r.hook = hs
+				if hs != nil {
+					hookTS = hs.TS
 				}
 				// Diff stats are the expensive part (git add -N + git diff); refresh them
 				// only when the instance may have changed. See session/diff_schedule.go.

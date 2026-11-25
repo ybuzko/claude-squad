@@ -78,3 +78,21 @@ func TestApplyHookStatusUsesHookTimestampAsStatusTime(t *testing.T) {
 	applyHookStatus(inst, &status.Status{State: status.StateIdle, TS: 1_791_000_000})
 	assert.Equal(t, int64(1_791_000_000), inst.StatusChangedAt.Unix())
 }
+
+func TestRefreshTicketDetailsFollowsAMovedTicket(t *testing.T) {
+	inst := &session.Instance{Title: "TSA-1", IssueID: "TSA-1", IssueUUID: "u1"}
+	other := &session.Instance{Title: "TSA-2", IssueID: "TSA-2", IssueUUID: "u2"}
+	moved := []linear.Issue{{ID: "u1", Identifier: "BILL-9", URL: "https://linear.app/x/issue/BILL-9", Title: "T"}}
+
+	assert.True(t, refreshTicketDetails(moved, []*session.Instance{inst, other}))
+	assert.Equal(t, "BILL-9", inst.IssueID)
+	assert.Equal(t, "https://linear.app/x/issue/BILL-9", inst.IssueURL)
+	assert.Equal(t, "TSA-1", inst.Title, "the title names the tmux session and stays")
+	assert.Equal(t, "TSA-1", inst.StatusKey(), "and so does the status file")
+	assert.Equal(t, "TSA-2", other.IssueID)
+}
+
+func TestStatusKey(t *testing.T) {
+	assert.Equal(t, "TSA-1", (&session.Instance{Title: "TSA-1", IssueID: "TSA-1"}).StatusKey())
+	assert.Equal(t, "session-scratch", (&session.Instance{Title: "scratch"}).StatusKey())
+}

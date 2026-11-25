@@ -129,15 +129,12 @@ func (m *home) handleTicketUpdateSent(msg ticketUpdateSentMsg) tea.Cmd {
 }
 
 // acceptsPrompt reports whether a running session is waiting at its input box. The
-// hook status is authoritative for ticket sessions; without one (and for sessions
-// made by hand), fall back to the pane heuristic.
+// hook status is authoritative; without one (a session started before cs exported
+// CS_STATUS_KEY, or a program other than Claude Code), fall back to the pane heuristic.
 func acceptsPrompt(inst *session.Instance) bool {
-	if !inst.IsTicket() {
-		return inst.Status == session.Ready
-	}
-	hs, err := status.Read(inst.IssueID)
+	hs, err := status.Read(inst.StatusKey())
 	if err != nil {
-		log.WarningLog.Printf("could not read hook status for %s: %v", inst.IssueID, err)
+		log.WarningLog.Printf("could not read hook status for %s: %v", inst.Title, err)
 		return false
 	}
 	if hs != nil {

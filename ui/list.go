@@ -181,6 +181,16 @@ func (l *List) CountByStatus() (blocked, idle int) {
 }
 
 // FindByTitle returns the instance with the given title, or nil.
+// Contains reports whether inst is in the list.
+func (l *List) Contains(inst *session.Instance) bool {
+	for _, item := range l.items {
+		if item == inst {
+			return true
+		}
+	}
+	return false
+}
+
 func (l *List) FindByTitle(title string) *session.Instance {
 	for _, item := range l.items {
 		if item.Title == title {
@@ -277,11 +287,17 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 	}
 
 	// First row: id, then the ticket's Linear state, then its due date; cut to fit.
+	// A ticket shows its current id, which differs from the title once it has moved
+	// to another team.
+	name := i.Title
 	stateText := ""
-	if i.IsTicket() && i.IssueState != "" {
-		stateText = " · " + i.IssueState
+	if i.IsTicket() {
+		name = i.IssueID
+		if i.IssueState != "" {
+			stateText = " · " + i.IssueState
+		}
 	}
-	plain := i.Title + stateText
+	plain := name + stateText
 	if due := dueLabel(i.IssueDueDate, time.Now()); due != "" {
 		plain += " (" + due + ")"
 	}
@@ -299,10 +315,10 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 	bg := titleS.GetBackground()
 	base := lipgloss.NewStyle().Background(bg).Foreground(titleS.GetForeground())
 	titleText := base.Render(prefix + " " + plain)
-	if stateText != "" && len(plain) > len(i.Title) {
-		end := min(len(i.Title)+len(stateText), len(plain))
-		titleText = base.Render(prefix+" "+plain[:len(i.Title)]) +
-			issueStateStyle(i.IssueState).Background(bg).Render(plain[len(i.Title):end]) +
+	if stateText != "" && len(plain) > len(name) {
+		end := min(len(name)+len(stateText), len(plain))
+		titleText = base.Render(prefix+" "+plain[:len(name)]) +
+			issueStateStyle(i.IssueState).Background(bg).Render(plain[len(name):end]) +
 			base.Render(plain[end:])
 	}
 	title := titleS.Render(lipgloss.JoinHorizontal(

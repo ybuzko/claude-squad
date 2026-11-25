@@ -128,3 +128,46 @@ func TestInstanceLimitGatesDispatcherButNotManualSpawns(t *testing.T) {
 	assert.NotNil(t, h.list.FindByTitle("TSA-3"))
 	assert.Equal(t, 2, h.list.NumInstances())
 }
+
+func TestTicketLookupSelectsTheExistingSession(t *testing.T) {
+	h := newPollHome(t)
+	other := ticket("TSA-2", session.Ready, true)
+	inst := ticket("TSA-1", session.Ready, true)
+	inst.IssueUUID = "u1"
+	h.list.AddInstance(other)
+	h.list.AddInstance(inst)
+	h.list.SelectInstance(other)
+
+	// The ticket moved teams since: same UUID, new id.
+	_, _ = h.Update(ticketLookupDoneMsg{issue: linear.Issue{ID: "u1", Identifier: "BILL-9"}})
+	assert.Equal(t, 2, h.list.NumInstances(), "no second session")
+	assert.Same(t, inst, h.list.GetSelectedInstance())
+	assert.Equal(t, "BILL-9", inst.IssueID)
+}
+
+func TestTicketLookupRestoresAnArchivedSession(t *testing.T) {
+	h := newPollHome(t)
+	inst := ticket("TSA-1", session.Paused, false)
+	inst.IssueUUID = "u1"
+	inst.Archived = true
+	h.archive.AddInstance(inst)
+
+	_, _ = h.Update(ticketLookupDoneMsg{issue: linear.Issue{ID: "u1", Identifier: "BILL-9"}})
+	assert.Same(t, inst, h.list.FindByTitle("TSA-1"))
+	assert.Nil(t, h.archive.FindByTitle("TSA-1"))
+	assert.True(t, inst.Restoring)
+	assert.Same(t, inst, h.list.GetSelectedInstance())
+}
+
+func TestDrainPendingRestoresAMovedTicketInsteadOfSpawning(t *testing.T) {
+	h := newPollHome(t)
+	inst := ticket("TSA-1", session.Paused, false)
+	inst.IssueUUID = "u1"
+	inst.Archived = true
+	h.archive.AddInstance(inst)
+
+	h.handlePollDone(linearPollDoneMsg{view: []linear.Issue{{ID: "u1", Identifier: "BILL-9"}}})
+	assert.Equal(t, 1, h.list.NumInstances())
+	assert.Same(t, inst, h.list.FindByTitle("TSA-1"))
+	assert.Equal(t, "BILL-9", inst.IssueID)
+}

@@ -110,7 +110,17 @@ type Config struct {
 	// launches, asking for a one-line TL;DR at the end of each turn so the preview of
 	// any session shows where it stands. "off" disables it.
 	RecapPrompt string `json:"recap_prompt,omitempty"`
+	// Notify picks the desktop notifications cs sends: NotifyBlocked when a session
+	// needs you (a permission prompt or a question), NotifyBlockedIdle (the default)
+	// also when a session finishes its turn, NotifyOff for none.
+	Notify string `json:"notify,omitempty"`
 }
+
+const (
+	NotifyOff         = "off"
+	NotifyBlocked     = "blocked"
+	NotifyBlockedIdle = "blocked+idle"
+)
 
 const (
 	DefaultInstanceLimit         = 10
@@ -179,6 +189,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.RecapPrompt == "" {
 		c.RecapPrompt = defaultRecapPrompt
+	}
+	if c.Notify == "" {
+		c.Notify = NotifyBlockedIdle
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -230,12 +231,13 @@ func (m *home) drainPending() []tea.Cmd {
 		m.list.NumInstances() < m.instanceLimit() {
 		issue := d.pending[0]
 		d.pending = d.pending[1:]
-		if m.list.FindByTitle(issue.Identifier) != nil {
+		existing, archived := m.findTicketSession(issue)
+		if existing != nil && !archived {
 			continue
 		}
-		if archived := m.archive.FindByTitle(issue.Identifier); archived != nil {
-			archived.InView = true
-			cmds = append(cmds, m.restoreSession(archived, m.resumePrompt(issue.Identifier), "ticket back in the view"))
+		if existing != nil {
+			existing.InView = true
+			cmds = append(cmds, m.restoreSession(existing, m.resumePrompt(issue.Identifier), "ticket back in the view"))
 			continue
 		}
 		cmd, err := m.spawnTicket(issue, true)
@@ -271,15 +273,10 @@ func ticketBranchName(prefix string, issue linear.Issue) string {
 // once the ticket leaves it; `t` spawns pass false and the next poll settles it.
 func (m *home) spawnTicket(issue linear.Issue, inView bool) (tea.Cmd, error) {
 	d := m.dispatcher
-	if m.list.FindByTitle(issue.Identifier) != nil || m.archive.FindByTitle(issue.Identifier) != nil {
-		return nil, fmt.Errorf("an instance for %s already exists", issue.Identifier)
+	if inst, _ := m.findTicketSession(issue); inst != nil {
+		return nil, fmt.Errorf("an instance for %s already exists (%s)", issue.Identifier, inst.Title)
 	}
-
-	// A status file left behind by an earlier session for this ticket would be
-	// mistaken for the new session's state until its first hook fires.
-	if err := status.Remove(issue.Identifier); err != nil {
-		log.WarningLog.Printf("could not remove stale status for %s: %v", issue.Identifier, err)
-	}
+	// Instance.Start drops any status file an earlier session with this title left.
 
 	instance, err := session.NewInstance(session.InstanceOptions{
 		Title:         issue.Identifier,
@@ -478,19 +475,26 @@ func planView(view []linear.Issue, active, archived []*session.Instance) viewPla
 	return plan
 }
 
-// refreshTicketDetails copies each ticket's current title, due date and state from Linear
-// onto its instances, active or archived. Returns true if anything changed.
+// refreshTicketDetails copies each ticket's current id, title, due date and state from
+// Linear onto its instances, active or archived. Tickets are matched by their Linear
+// UUID, so a ticket moved to another team (and given a new id) keeps its session.
+// Returns true if anything changed.
 func refreshTicketDetails(issues []linear.Issue, lists ...[]*session.Instance) bool {
-	byID := make(map[string]linear.Issue, len(issues))
-	for _, is := range issues {
-		byID[is.Identifier] = is
-	}
 	changed := false
 	for _, list := range lists {
 		for _, inst := range list {
-			is, ok := byID[inst.IssueID]
-			if !inst.IsTicket() || !ok {
+			if !inst.IsTicket() {
 				continue
+			}
+			k := slices.IndexFunc(issues, func(is linear.Issue) bool { return ticketMatches(inst, is) })
+			if k < 0 {
+				continue
+			}
+			is := issues[k]
+			if is.Identifier != "" && inst.IssueID != is.Identifier {
+				log.InfoLog.Printf("%s: ticket %s is now %s", inst.Title, inst.IssueID, is.Identifier)
+				inst.IssueID, inst.IssueURL = is.Identifier, is.URL
+				changed = true
 			}
 			if inst.IssueTitle != is.Title || inst.IssueDueDate != is.DueDate || inst.IssueState != is.StateName {
 				inst.IssueTitle, inst.IssueDueDate, inst.IssueState = is.Title, is.DueDate, is.StateName
@@ -499,4 +503,32 @@ func refreshTicketDetails(issues []linear.Issue, lists ...[]*session.Instance) b
 		}
 	}
 	return changed
+}
+
+// ticketMatches reports whether inst is the session for issue: same Linear UUID, or
+// for a session without one, the same ticket id.
+func ticketMatches(inst *session.Instance, issue linear.Issue) bool {
+	if !inst.IsTicket() {
+		return false
+	}
+	if inst.IssueUUID != "" && issue.ID != "" {
+		return inst.IssueUUID == issue.ID
+	}
+	return inst.IssueID == issue.Identifier
+}
+
+// findTicketSession returns the session for issue, active or archived, matched by
+// Linear UUID so a ticket that moved teams is still found under its old id.
+func (m *home) findTicketSession(issue linear.Issue) (inst *session.Instance, archived bool) {
+	for _, inst := range m.list.GetInstances() {
+		if ticketMatches(inst, issue) {
+			return inst, false
+		}
+	}
+	for _, inst := range m.archive.GetInstances() {
+		if ticketMatches(inst, issue) {
+			return inst, true
+		}
+	}
+	return nil, false
 }
